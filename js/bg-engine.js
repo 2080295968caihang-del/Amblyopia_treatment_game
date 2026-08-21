@@ -240,6 +240,7 @@
       paletteIndex: 0, prevPaletteIndex: -1,
       colorCrossfadeAt: 0,
       accents: [], accentAt: 0,
+      geomSize: null,                // 几何生成时的画布尺寸（尺寸变化需重建）
       running: false, paused: false, pauseStart: null
     };
 
@@ -253,6 +254,7 @@
       if (st.modeIndex >= 0) {
         st.seed = (Math.random() * 1e9) >>> 0;
         st.geom = buildBgGeom(st.modeIndex, st.seed, canvas.width, canvas.height);
+        st.geomSize = { w: canvas.width, h: canvas.height };
       }
       st.flickerHz = jitterHz(flickerHzForLevel(st.settings.flickerLevel));
       st.accents = [];
@@ -402,9 +404,14 @@
         if (st.running) {
           var cur = st.modeIndex;
           var stillEnabled = cur >= 0 && cur < st.settings.modes.length && st.settings.modes[cur] === true;
+          var sizeChanged = !st.geomSize || st.geomSize.w !== canvas.width || st.geomSize.h !== canvas.height;
           if (!stillEnabled) {
             st.prevModeIndex = cur;
             newPattern(nowMs());
+          } else if (sizeChanged && cur >= 0) {
+            // 画布尺寸变化：按同一种子重建几何（保持图案，避免跳变）
+            st.geom = buildBgGeom(cur, st.seed, canvas.width, canvas.height);
+            st.geomSize = { w: canvas.width, h: canvas.height };
           } else {
             st.flickerHz = jitterHz(flickerHzForLevel(st.settings.flickerLevel));
           }
