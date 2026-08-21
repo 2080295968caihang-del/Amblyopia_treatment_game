@@ -82,14 +82,22 @@ html, body {
   text-shadow: 0 0 18px rgba(255, 212, 0, 0.5);
 }
 .eye-reminder {
-  max-width: 640px;
+  max-width: 680px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
   font-size: clamp(20px, 3.4vmin, 32px);
   font-weight: bold;
   color: var(--color-fg);
   background: #1a1a00;
   border: 3px solid var(--color-accent);
   border-radius: 14px;
-  padding: 12px 24px;
+  padding: 16px 28px;
+}
+.eye-reminder-icon {
+  font-size: clamp(44px, 11vmin, 84px);
+  line-height: 1;
 }
 .high-score {
   font-size: clamp(18px, 3vmin, 28px);
@@ -148,9 +156,12 @@ html, body {
   height: 100%;
   display: block;
 }
-.small-tip {
-  font-size: clamp(13px, 2vmin, 18px);
-  color: #cccccc;
+.hud-eye-tip {
+  color: var(--color-accent);
+  background: #1a1a00;
+  border: 2px solid var(--color-accent);
+  border-radius: 8px;
+  padding: 4px 10px;
 }
 
 /* ===== 结束浮层 ===== */
@@ -182,6 +193,9 @@ html, body {
 }
 .overlay-card h2 { color: var(--color-danger); }
 .overlay-card .stat span { color: var(--color-accent); font-weight: bold; }
+#endOverlay {
+  background: rgba(0, 0, 0, 0.72); /* 结束浮层：半透明遮罩变暗 */
+}
 
 /* ===== 设置抽屉 ===== */
 .drawer {
@@ -267,7 +281,10 @@ input[type="checkbox"] {
 <!-- 开始屏 -->
 <div id="startScreen" class="screen">
   <h1>弱视治疗贪吃蛇</h1>
-  <p class="eye-reminder">请先遮盖好眼，只用弱视眼看</p>
+  <div class="eye-reminder" role="note">
+    <div class="eye-reminder-icon" aria-hidden="true">👁️</div>
+    <p>请先遮盖好眼，只用弱视眼看</p>
+  </div>
   <div class="high-score">最高分：<span id="startHighScore">0</span></div>
   <div class="btn-group">
     <button id="btnStart" class="btn btn-primary" type="button">开始游戏</button>
@@ -281,8 +298,9 @@ input[type="checkbox"] {
     <div class="stat">分数 <span id="hudScore">0</span></div>
     <div class="stat">最高 <span id="hudHighScore">0</span></div>
     <div class="stat">速度 <span id="hudSpeed">1</span></div>
+    <div class="stat hud-eye-tip">👁 遮盖好眼，只用弱视眼看</div>
     <div class="stat">
-      <button id="btnPause" class="btn" type="button">暂停</button>
+      <button id="btnPause" class="btn" type="button">⏸ 暂停</button>
       <button id="btnMute" class="btn" type="button">静音</button>
     </div>
   </div>
@@ -290,7 +308,6 @@ input[type="checkbox"] {
     <canvas id="bgCanvas" width="630" height="630"></canvas>
     <canvas id="gameCanvas" width="630" height="630"></canvas>
   </div>
-  <p class="small-tip">遮盖好眼，只用弱视眼看</p>
 </div>
 
 <!-- 结束浮层 -->
@@ -459,6 +476,16 @@ function speedLevelForDisplay(foodsEaten, baseMs) {
   const currentMs = speedForLevel(foodsEaten, baseMs);
   const level = Math.round((baseMs - currentMs) / SPEED_DELTA_MS) + 1;
   return Math.min(Math.max(level, 1), MAX_SPEED_LEVEL);
+}
+
+// 自适应棋盘边长（CSS 像素，Task 7）：取 min(视口宽, 视口高 - 预留高度)，向下取整到
+// GRID_SIZE 的整数倍，保证每格是整数像素；视口过小时至少保留一格的边长。
+const LAYOUT_RESERVED_H = 140;  // HUD + 常驻遮眼提示 + 边距预留高度（CSS 像素）
+function computeBoardSize(viewportW, viewportH, reservedH) {
+  const reserved = typeof reservedH === 'number' && reservedH >= 0 ? reservedH : LAYOUT_RESERVED_H;
+  const available = Math.min(viewportW, viewportH - reserved);
+  const cells = Math.max(1, Math.floor(available / GRID_SIZE));
+  return cells * GRID_SIZE;
 }
 
 // 闪烁频率档位映射：0/1/2 → 0.95/1.4/2.4 Hz，越界时回退到最快档
@@ -1612,6 +1639,24 @@ function runSelfTests() {
     try { eatSound(); overSound(); return true; } catch (e) { return false; }
   })(), '调用抛出异常');
 
+  // ---- 自适应缩放：computeBoardSize（Task 7）----
+  check('computeBoardSize: 返回值始终是 GRID_SIZE 的整数倍', (function () {
+    const cases = [[1920, 1080], [1080, 1920], [1024, 768], [768, 1024], [320, 480], [640, 600], [2560, 1440], [390, 844]];
+    for (let i = 0; i < cases.length; i++) {
+      const size = computeBoardSize(cases[i][0], cases[i][1], 140);
+      if (size % GRID_SIZE !== 0 || size < GRID_SIZE) return false;
+    }
+    return true;
+  })(), '出现非整数倍或小于单格');
+  check('computeBoardSize: 横屏 1920×1080 以高度为约束', computeBoardSize(1920, 1080, 140) === 924, '实际 ' + computeBoardSize(1920, 1080, 140));
+  check('computeBoardSize: 竖屏 1080×1920 以宽度为约束', computeBoardSize(1080, 1920, 140) === 1071, '实际 ' + computeBoardSize(1080, 1920, 140));
+  check('computeBoardSize: 平板横屏 1024×768', computeBoardSize(1024, 768, 140) === 609, '实际 ' + computeBoardSize(1024, 768, 140));
+  check('computeBoardSize: 平板竖屏 768×1024', computeBoardSize(768, 1024, 140) === 756, '实际 ' + computeBoardSize(768, 1024, 140));
+  check('computeBoardSize: 高度受限时取 高-预留', computeBoardSize(1920, 600, 140) === 441, '实际 ' + computeBoardSize(1920, 600, 140));
+  check('computeBoardSize: 小视口回退到单格边长', computeBoardSize(20, 500, 100) === GRID_SIZE, '实际 ' + computeBoardSize(20, 500, 100));
+  check('computeBoardSize: 视口小于预留高度仍不小于单格', computeBoardSize(100, 50, 140) === GRID_SIZE, '实际 ' + computeBoardSize(100, 50, 140));
+  check('computeBoardSize: 预留高度缺省时用默认值', computeBoardSize(640, 700, 140) === computeBoardSize(640, 700), '实际不一致');
+
   return results;
 }
 
@@ -1789,14 +1834,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
       bgAnimId = null;
       return; // 暂停：冻结动画（保留当前帧），避免无谓闪烁
     }
-    // 尺寸与窗口同步：画布分辨率跟随其显示尺寸
-    const dw = Math.max(1, Math.round(bgCanvasEl.clientWidth));
-    const dh = Math.max(1, Math.round(bgCanvasEl.clientHeight));
-    if (bgCanvasEl.width !== dw || bgCanvasEl.height !== dh) {
-      bgCanvasEl.width = dw;
-      bgCanvasEl.height = dh;
-      bgGeomDirty = true; // 尺寸变化：按同一种子重建几何
-    }
+    // 画布分辨率由 applyResponsiveLayout 统一维护（含 DPR），尺寸变化时已在其中重建几何
     const ctx = bgCanvasEl.getContext('2d');
     // 每 20-40s 轮换模式/配色；混合模式每 5-8s 穿插彩色点缀
     if (timestamp >= bgRotateAt) rotateBgPattern(timestamp);
@@ -1890,6 +1928,29 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     document.getElementById('hudSpeed').textContent = String(speedLevelForDisplay(state.foodsEaten, initialSpeedMs(settings.startSpeed)));
   }
 
+  // HUD 暂停按钮与暂停/恢复路径（Task 7）：与键盘空格/P 共用同一 state.paused 语义，
+  // 按钮文案随暂停状态同步（⏸ 暂停 / ▶ 继续）。
+  const btnPause = document.getElementById('btnPause');
+  function syncPauseButton() {
+    if (btnPause) btnPause.textContent = state.paused ? '▶ 继续' : '⏸ 暂停';
+  }
+  // 暂停：记录背景暂停起点并停循环（供恢复时补偿相位），同步按钮文案
+  function pauseGame() {
+    if (!state.running || state.gameOver || state.paused) return;
+    state.paused = true;
+    if (bgPauseStart === null) bgPauseStart = performance.now();
+    stopBgLoop();
+    syncPauseButton();
+  }
+  // 恢复：补偿暂停时长后重启背景循环，同步按钮文案
+  function resumeGame() {
+    if (!state.running || state.gameOver || !state.paused) return;
+    state.paused = false;
+    syncPauseButton();
+    startBgLoop();
+  }
+  syncPauseButton(); // 初始文案与暂停状态一致（⏸ 暂停）
+
   // 在 #gameCanvas 上绘制蛇与食物（网格按 canvas 尺寸均分）
   function renderGame() {
     const canvas = document.getElementById('gameCanvas');
@@ -1973,6 +2034,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     document.getElementById('endScore').textContent = String(state.score);
     document.getElementById('endHighScore').textContent = String(readHighScore());
     document.getElementById('endOverlay').classList.remove('hidden');
+    syncPauseButton(); // 结束浮层覆盖 HUD：按钮文案与暂停状态保持一致
   }
 
   // 开始 / 再玩一次：重置状态并启动主循环
@@ -1988,6 +2050,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     lastFrameTs = null;
     lastMouseCell = null; // 跨局清除鼠标目标格，避免残留跟随
     updateHud();
+    syncPauseButton(); // 重置后暂停按钮回到"暂停"文案
     renderGame();
     if (!bgInitialized) initBg(performance.now()); // 首次开始：初始化背景
     startBgLoop(); // 开始游戏：启动背景循环
@@ -2085,6 +2148,14 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     });
   }
   updateMuteButton(); // 初始按当前设置回填按钮文案
+  // HUD 暂停按钮：与键盘空格/P 同语义，暂停/恢复同步文案与背景循环启停
+  if (btnPause) {
+    btnPause.addEventListener('click', function () {
+      if (!state.running || state.gameOver) return; // 与键盘相同的运行态守卫
+      if (state.paused) resumeGame();
+      else pauseGame();
+    });
+  }
   // 背景变化三开关（id 与 settings 键同名）：回填 + 变更即生效并持久化
   const bgCheckboxKeys = ['colorChange', 'shapeChange', 'flickerChange'];
   for (let i = 0; i < bgCheckboxKeys.length; i++) {
@@ -2103,7 +2174,11 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   function onKeyDown(e) {
     if (e.repeat) return; // 长按重复触发（约 30Hz）跳过，避免空格/P 快速抖动暂停
     if (!state.running || state.gameOver) return; // 未开始 / 已结束：按键不生效
-    if (handleGameKey(state, e.key)) e.preventDefault(); // 命中方向或暂停键时阻止默认行为（滚动/聚焦）
+    if (handleGameKey(state, e.key)) {
+      // 键盘暂停后同步 HUD 暂停按钮文案（背景暂停补偿仍由 bgLoop/startBgLoop 负责）
+      if (e.key === ' ' || e.key === 'p' || e.key === 'P') syncPauseButton();
+      e.preventDefault(); // 命中方向或暂停键时阻止默认行为（滚动/聚焦）
+    }
   }
   window.addEventListener('keydown', onKeyDown);
 
@@ -2156,6 +2231,30 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   function handleTouchStart(e) { /* 平板 WebView 接入点：预留 */ }
   function handleTouchMove(e) { /* 平板 WebView 接入点：预留 */ }
   function handleTouchEnd(e) { /* 平板 WebView 接入点：预留 */ }
+
+  // ---- 自适应缩放（Task 7）：棋盘按 min(视口宽, 高-预留) 等比缩放，resize 时重算 ----
+  // #gameCanvas 与 #bgCanvas 同步内部分辨率（× devicePixelRatio 保证清晰度），
+  // 显示尺寸由 .board-wrap 宽度控制（CSS 像素），随窗口 / 横竖屏切换自动更新。
+  function applyResponsiveLayout() {
+    const wrap = document.querySelector('.board-wrap');
+    if (!wrap) return;
+    const boardCss = computeBoardSize(window.innerWidth, window.innerHeight, LAYOUT_RESERVED_H);
+    wrap.style.width = boardCss + 'px';
+    const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+    const canvasPx = Math.max(1, Math.round(boardCss * dpr));
+    if (bgCanvasEl && (bgCanvasEl.width !== canvasPx || bgCanvasEl.height !== canvasPx)) {
+      bgCanvasEl.width = canvasPx;
+      bgCanvasEl.height = canvasPx;
+      bgGeomDirty = true; // 尺寸变化：按同一种子重建几何
+    }
+    if (gameCanvasEl && (gameCanvasEl.width !== canvasPx || gameCanvasEl.height !== canvasPx)) {
+      gameCanvasEl.width = canvasPx;
+      gameCanvasEl.height = canvasPx;
+    }
+  }
+  window.addEventListener('resize', applyResponsiveLayout);
+  window.addEventListener('orientationchange', applyResponsiveLayout); // 平板横竖屏切换
+  applyResponsiveLayout(); // 启动时按当前视口重算一次
 
   if (new URLSearchParams(window.location.search).has('test')) {
     const selfTestResults = runSelfTests();
