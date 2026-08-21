@@ -451,6 +451,16 @@ function speedForLevel(foodsEaten, baseMs) {
   return Math.max(SPEED_MIN_MS, baseMs - level * SPEED_DELTA_MS);
 }
 
+// HUD 速度档：基于当前实际间隔相对起始速度的位置，1 起步、封顶 MAX_SPEED_LEVEL。
+// 家长自定义起始速度（startSpeed）会即时反映在档位上，
+// 不会出现"实际速度不变但档位虚高乱爬"（如 startSpeed=5 全程 60ms 时始终显示档 1）。
+function speedLevelForDisplay(foodsEaten, baseMs) {
+  if (baseMs === undefined) baseMs = SPEED_START_MS;
+  const currentMs = speedForLevel(foodsEaten, baseMs);
+  const level = Math.round((baseMs - currentMs) / SPEED_DELTA_MS) + 1;
+  return Math.min(Math.max(level, 1), MAX_SPEED_LEVEL);
+}
+
 // 闪烁频率档位映射：0/1/2 → 0.95/1.4/2.4 Hz，越界时回退到最快档
 function flickerHzForLevel(level) {
   if (level < 0 || level >= FLICKER_LEVELS.length) return FLICKER_LEVELS[FLICKER_LEVELS.length - 1];
@@ -521,8 +531,11 @@ function loadSettings() {
         const fl = Math.floor(saved.flickerLevel);
         if (fl >= 0 && fl < FLICKER_LEVELS.length) out.flickerLevel = fl;
       }
-      if (Array.isArray(saved.modes) && saved.modes.length === defaultSettings.modes.length) {
-        out.modes = saved.modes.map(function (m) { return m === true; }); // 归一化为布尔
+      if (Array.isArray(saved.modes)) {
+        // 按索引逐项合并：旧配置覆盖对应项，缺失索引保持默认 true（未来新增模式自动参与轮换）
+        for (let i = 0; i < out.modes.length; i++) {
+          if (i < saved.modes.length) out.modes[i] = saved.modes[i] === true; // 归一化为布尔
+        }
       }
       if (saved.colorMode === 'contrast' || saved.colorMode === 'mixed') out.colorMode = saved.colorMode;
       if (Number.isFinite(saved.startSpeed)) {
@@ -571,6 +584,15 @@ function pickNextMode(previousIndex, enabledModes) {
     next = enabled[Math.floor(Math.random() * enabled.length)];
   }
   return next;
+}
+
+// "下一步应显示的模式索引"纯函数（全关判定/过渡），供轮换与设置即时生效共用：
+// - 全部模式未勾选 → -1（纯背景色填充）；
+// - 已勾选且当前为 -1 → 恢复为随机有效模式；
+// - 已勾选且当前有效 → 按轮换规则选下一个（不与上一次重复）。
+function nextBgModeIndex(previousIndex, enabledModes) {
+  if (enabledModes.indexOf(true) === -1) return -1;
+  return pickNextMode(previousIndex, enabledModes);
 }
 
 // 从高对比配色组随机选一组索引，不连续两次相同
@@ -1438,6 +1460,9 @@ function runSelfTests() {
     try { localStorage.setItem(SETTINGS_KEY, JSON.stringify({ startSpeed: 4 })); } catch (e) {}
     const merged = loadSettings();
     check('loadSettings: 缺失字段用默认补齐', merged.startSpeed === 4 && merged.soundOn === true && merged.colorMode === 'contrast' && merged.shapeChange === true, '补齐失败');
+    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify({ modes: [true, false, true, false] })); } catch (e) {}
+    const short = loadSettings();
+    check('loadSettings: modes 按索引逐项合并补齐', short.modes.length === 6 && short.modes[0] === true && short.modes[1] === false && short.modes[3] === false && short.modes[4] === true && short.modes[5] === true, '实际 ' + JSON.stringify(short.modes));
     try {
       if (prevRaw === null) localStorage.removeItem(SETTINGS_KEY);
       else localStorage.setItem(SETTINGS_KEY, prevRaw);
@@ -1481,6 +1506,39 @@ function runSelfTests() {
     check('speedForLevel(n, baseMs): 按档递减', stepped === 80, '实际 ' + stepped);
     check('speedForLevel(n, baseMs): 不低于 SPEED_MIN_MS', clamped === SPEED_MIN_MS, '实际 ' + clamped);
   }
+
+  // ---- 审查补充：HUD 速度档与全关判定纯函数（Task 5）----
+  check('speedLevelForDisplay: 默认起始速度下档位与旧行为一致', (function () {
+    return speedLevelForDisplay(0) === 1 && speedLevelForDisplay(5) === 2 && speedLevelForDisplay(30) === MAX_SPEED_LEVEL;
+  })(), '实际 ' + speedLevelForDisplay(0) + '/' + speedLevelForDisplay(5) + '/' + speedLevelForDisplay(30));
+  check('speedLevelForDisplay: 自定义起始速度即时反映且不虚高', (function () {
+    return speedLevelForDisplay(0, 60) === 1 && speedLevelForDisplay(100, 60) === 1 &&
+      speedLevelForDisplay(0, 220) === 1 && speedLevelForDisplay(100, 220) === MAX_SPEED_LEVEL;
+  })(), '档位未按实际间隔计算');
+  check('speedLevelForDisplay: 档位封顶在 1~MAX_SPEED_LEVEL', (function () {
+    for (let f = 0; f < 200; f++) {
+      for (const base of [60, 100, 180, 220]) {
+        const lv = speedLevelForDisplay(f, base);
+        if (lv < 1 || lv > MAX_SPEED_LEVEL) return false;
+      }
+    }
+    return true;
+  })(), '出现越界档位');
+  check('nextBgModeIndex: 全关返回 -1', nextBgModeIndex(2, [false, false, false, false, false, false]) === -1, '未返回 -1');
+  check('nextBgModeIndex: -1 时全关仍返回 -1', nextBgModeIndex(-1, [false, false, false, false, false, false]) === -1, '未返回 -1');
+  check('nextBgModeIndex: 重新勾选后从 -1 恢复有效模式', (function () {
+    for (let i = 0; i < 50; i++) {
+      if (nextBgModeIndex(-1, [false, true, false, false, false, false]) !== 1) return false;
+    }
+    return true;
+  })(), '未恢复有效模式');
+  check('nextBgModeIndex: 有效模式下轮换不与上一次重复且在启用集合内', (function () {
+    for (let i = 0; i < 100; i++) {
+      const next = nextBgModeIndex(3, [true, true, false, false, true, false]);
+      if (next < 0 || next === 3 || (next !== 0 && next !== 1 && next !== 4)) return false;
+    }
+    return true;
+  })(), '出现重复或越界');
 
   return results;
 }
@@ -1566,19 +1624,17 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   // 重新勾选后轮换自动恢复。
   function rotateBgPattern(now) {
     let modeChanged = false;
-    if (settings.modes.indexOf(true) === -1) {
+    const next = nextBgModeIndex(bgModeIndex, settings.modes); // 全关→-1、有效模式→轮换候选
+    if (next < 0) {
       // 全部模式未勾选：过渡到纯背景色填充（配色轮换仍生效）
       if (bgModeIndex >= 0) {
         bgModeIndex = -1;
         bgGeomDirty = true;   // 几何失效，重建（纯色路径不依赖几何）
         bgAccents = [];       // 清空点缀，避免残留彩色圆点
       }
-    } else if (settings.shapeChange) {
-      const next = pickNextMode(bgModeIndex, settings.modes);
-      if (next >= 0 && next !== bgModeIndex) {
-        bgModeIndex = next;
-        modeChanged = true;
-      }
+    } else if ((settings.shapeChange || bgModeIndex < 0) && next !== bgModeIndex) {
+      bgModeIndex = next;     // 轮换新模式；从 -1 恢复时不受形状开关限制
+      modeChanged = true;
     }
     if (settings.colorChange) {
       const next = pickColorPalette(bgPaletteIndex);
@@ -1700,21 +1756,25 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     }
   }
 
-  // 家长设置即时生效（抽屉控件变更时调用）：
-  // 闪烁频率按最新档位重取；全部模式取消勾选时切到 -1 纯色路径并清空点缀；
-  // 重新勾选后立即恢复轮换。
+  // 仅闪烁档位变更时调用：按最新档位重取当前图案的闪烁频率。
+  // 与 applyBgSettings 分离，避免改起始速度/配色等设置时闪烁频率被重新抖动（视觉跳动）。
+  function applyFlickerLevel() {
+    bgFlickerHz = jitterHz(flickerHzForLevel(settings.flickerLevel));
+  }
+
+  // 家长设置即时生效（抽屉控件变更时调用）：全部模式取消勾选时切到 -1 纯色路径并清空点缀；
+  // 重新勾选后立即恢复轮换（换新种子与相位，图案从头绘制）。不在此处重取闪烁频率。
   function applyBgSettings() {
-    bgFlickerHz = jitterHz(flickerHzForLevel(settings.flickerLevel)); // 当前图案立即改用新闪烁频率
-    if (settings.modes.indexOf(true) === -1) {
+    const next = nextBgModeIndex(bgModeIndex, settings.modes); // 全关→-1、-1 恢复→有效模式
+    if (next < 0) {
       if (bgModeIndex >= 0) {
         bgModeIndex = -1;
         bgGeomDirty = true;
         bgAccents = [];     // 清空点缀，过渡到纯背景色填充
       }
     } else if (bgModeIndex < 0) {
-      bgModeIndex = pickNextMode(-1, settings.modes); // 恢复轮换
-      bgGeomDirty = true;
-      bgModeT0 = performance.now(); // 重置相位起点，图案从头绘制
+      bgModeIndex = next;   // 恢复轮换
+      newBgPattern(performance.now()); // 统一重置种子/相位/点缀计划，避免复用旧几何
     }
   }
 
@@ -1751,11 +1811,11 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     return high;
   }
 
-  // 刷新 HUD：分数 / 最高分 / 速度档
+  // 刷新 HUD：分数 / 最高分 / 速度档（档位基于当前实际间隔计算，家长起始速度即时反映）
   function updateHud() {
     document.getElementById('hudScore').textContent = String(state.score);
     document.getElementById('hudHighScore').textContent = String(syncHighScore());
-    document.getElementById('hudSpeed').textContent = String(Math.min(1 + Math.floor(state.foodsEaten / SPEED_STEP), MAX_SPEED_LEVEL));
+    document.getElementById('hudSpeed').textContent = String(speedLevelForDisplay(state.foodsEaten, initialSpeedMs(settings.startSpeed)));
   }
 
   // 在 #gameCanvas 上绘制蛇与食物（网格按 canvas 尺寸均分）
@@ -1896,19 +1956,19 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
       radios[i].checked = radios[i].value === String(value);
     }
   }
-  function bindRadios(name, onPick) {
+  function bindRadios(name, onPick, afterApply) {
     const radios = document.querySelectorAll('input[name="' + name + '"]');
     for (let i = 0; i < radios.length; i++) {
       radios[i].addEventListener('change', function () {
         if (!this.checked) return;
         onPick(this.value);
         saveSettings(settings);
-        applyBgSettings();
+        (afterApply || applyBgSettings)(); // 闪烁档位单独走 applyFlickerLevel，其余走 applyBgSettings
       });
     }
   }
   backfillRadio('flickerLevel', settings.flickerLevel);
-  bindRadios('flickerLevel', function (v) { settings.flickerLevel = Number(v); });
+  bindRadios('flickerLevel', function (v) { settings.flickerLevel = Number(v); }, applyFlickerLevel);
   backfillRadio('colorMode', settings.colorMode);
   bindRadios('colorMode', function (v) { settings.colorMode = v; });
   backfillRadio('startSpeed', settings.startSpeed);
