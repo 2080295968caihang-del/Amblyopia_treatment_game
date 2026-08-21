@@ -3,7 +3,8 @@
 const fs = require('fs');
 const path = require('path');
 
-const target = process.argv[2] || path.join(__dirname, 'amblyopia_game', 'snake_game.html');
+const local = path.join(__dirname, 'snake_game.html');
+const target = process.argv[2] || (fs.existsSync(local) ? local : path.join(__dirname, 'amblyopia_game', 'snake_game.html'));
 const html = fs.readFileSync(target, 'utf8');
 
 // 提取所有 <script>...</script> 内容（不含 src）
