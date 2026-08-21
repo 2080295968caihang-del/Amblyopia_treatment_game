@@ -512,16 +512,18 @@ function togglePause(state) {
   return state;
 }
 
-// 方向/暂停键统一入口：仅游戏运行中生效；未开始或 gameOver 后按键一律忽略并返回 false
+// 方向/暂停键统一入口：仅游戏运行中生效；未开始或 gameOver 后按键一律忽略并返回 false。
+// 方向键成功写入时复位 mouseActive：键盘接管、鼠标跟随暂停，下次移动鼠标再恢复。
 function handleGameKey(state, key) {
   if (!state.running || state.gameOver) return false;
   if (key === ' ' || key === 'p' || key === 'P') {
-    togglePause(state);
+    togglePause(state); // 暂停键不干预鼠标跟随状态（恢复后延续当前控制方式）
     return true;
   }
   const dir = directionForKey(key);
   if (dir === null) return false;
-  setDirection(state, dir); // 键盘可随时覆盖鼠标跟随
+  const applied = setDirection(state, dir);
+  if (applied) state.mouseActive = false; // 键盘方向键接管：复位鼠标跟随
   return true;
 }
 
@@ -872,6 +874,27 @@ function runSelfTests() {
     const ok = handleGameKey(s, 'Enter');
     check('handleGameKey: 无效键返回 false 且不改状态', ok === false && JSON.stringify(s) === before, '实际 ok=' + ok);
   }
+
+  // ---- 输入控制：键盘命中复位鼠标跟随（审查修复）----
+  {
+    const s = createInitialState();
+    s.running = true; s.mouseActive = true;
+    const ok = handleGameKey(s, 'ArrowUp');
+    check('handleGameKey: 方向键命中后 mouseActive 复位（键盘接管）', ok === true && s.mouseActive === false && s.nextDir === 'up', '实际 ok=' + ok + ' mouseActive=' + s.mouseActive + ' nextDir=' + s.nextDir);
+  }
+  {
+    const s = createInitialState();
+    s.running = true; s.mouseActive = true;
+    const ok = handleGameKey(s, ' ');
+    check('handleGameKey: 暂停键不重置鼠标跟随', ok === true && s.mouseActive === true && s.paused === true, '实际 ok=' + ok + ' mouseActive=' + s.mouseActive);
+  }
+  {
+    const s = createInitialState();
+    s.running = true; s.mouseActive = true;
+    s.dir = 'right'; s.nextDir = 'right';
+    const ok = handleGameKey(s, 'ArrowLeft'); // 180° 反向被拒
+    check('handleGameKey: 反向键被拒时保留鼠标跟随（仅成功时接管）', ok === true && s.nextDir === 'right' && s.mouseActive === true, '实际 ok=' + ok + ' nextDir=' + s.nextDir + ' mouseActive=' + s.mouseActive);
+  }
   return results;
 }
 
@@ -984,7 +1007,8 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   // 每 tick 走一步：只更新逻辑与 HUD，渲染统一在帧末进行
   function tick() {
 
-    // 鼠标跟随：每 tick 由蛇头到鼠标的向量取主导轴方向（键盘仍可随时覆盖）
+    // 鼠标跟随：每 tick 由蛇头到鼠标的向量取主导轴方向
+    // （键盘方向键命中后 handleGameKey 已复位 mouseActive，此处不再覆盖）
     if (state.mouseActive && lastMouseCell) {
       steerByMouse(state, lastMouseCell);
     }
