@@ -442,6 +442,26 @@
     check('transitionAlpha 过渡边界', transitionAlpha(100, 100, 15000, 1000) === 0 && transitionAlpha(1100, 100, 15000, 1000) === 1 && Math.abs(transitionAlpha(600, 100, 15000, 1000) - 0.5) < 1e-9);
     check('buildBgGeom cam_grating 条宽范围', (function () { var g = buildBgGeom(1, 12345, 600, 600); return g.width >= 40 && g.width <= 80; })());
     check('COLOR_PALETTES 4 组', COLOR_PALETTES.length === 4);
+    var noRepeatPal = true;
+    var pp = 0;
+    for (var pi = 0; pi < 200; pi++) { var pn = pickColorPalette(pp); if (pn === pp || pn < 0 || pn >= COLOR_PALETTES.length) noRepeatPal = false; pp = pn; }
+    check('pickColorPalette 200 次不重复且在范围内', noRepeatPal);
+    check('nextBgModeIndex 从 -1 恢复有效模式', (function () {
+      var n = nextBgModeIndex(-1, [false, false, true, false]);
+      return n === 2;
+    })());
+    check('buildBgGeom stripes 方向/条宽合法', (function () {
+      var ok = true;
+      for (var si = 0; si < 50; si++) {
+        var g = buildBgGeom(3, (Math.random() * 1e9) >>> 0, 600, 600);
+        if (['horizontal', 'vertical', 'diagonal'].indexOf(g.direction) === -1 || g.width < 40 || g.width > 100) ok = false;
+      }
+      return ok;
+    })());
+    check('buildBgGeom checkerboard 格数合理', (function () {
+      var g = buildBgGeom(2, 999, 600, 600);
+      return g.cell >= 8;
+    })());
     return r;
   }
 

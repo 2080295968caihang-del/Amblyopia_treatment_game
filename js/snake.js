@@ -630,6 +630,21 @@
       return speedForLevel(0, 30) === SPEED_MIN_MS;
     })(), '实际 ' + speedForLevel(0, 30));
 
+    // ---- computeBoardSize：自适应棋盘（审查补充） ----
+    check('computeBoardSize: 返回值是 GRID_SIZE 整数倍且不超 MAX_BOARD_CSS', (function () {
+      var v = computeBoardSize(1024, 768, 140);
+      return v % GRID_SIZE === 0 && v <= MAX_BOARD_CSS;
+    })(), '实际 ' + computeBoardSize(1024, 768, 140));
+    check('computeBoardSize: 横屏大屏 1920×1080 封顶', computeBoardSize(1920, 1080, 140) === Math.floor(MAX_BOARD_CSS / GRID_SIZE) * GRID_SIZE, '实际 ' + computeBoardSize(1920, 1080, 140));
+    check('computeBoardSize: 竖屏大屏 1080×1920 封顶', computeBoardSize(1080, 1920, 140) === Math.floor(MAX_BOARD_CSS / GRID_SIZE) * GRID_SIZE, '实际 ' + computeBoardSize(1080, 1920, 140));
+    check('computeBoardSize: 平板横屏 1024×768 以高度为约束', computeBoardSize(1024, 768, 140) === 609, '实际 ' + computeBoardSize(1024, 768, 140));
+    check('computeBoardSize: 平板竖屏 768×1024 封顶', computeBoardSize(768, 1024, 140) === Math.floor(MAX_BOARD_CSS / GRID_SIZE) * GRID_SIZE, '实际 ' + computeBoardSize(768, 1024, 140));
+    check('computeBoardSize: 高度受限时取 高-预留', computeBoardSize(1920, 600, 140) === 441, '实际 ' + computeBoardSize(1920, 600, 140));
+    check('computeBoardSize: 小视口回退到单格边长', computeBoardSize(20, 500, 100) === GRID_SIZE, '实际 ' + computeBoardSize(20, 500, 100));
+    check('computeBoardSize: 视口小于预留高度仍不小于单格', computeBoardSize(100, 50, 140) === GRID_SIZE, '实际 ' + computeBoardSize(100, 50, 140));
+    check('computeBoardSize: 预留高度缺省时用默认值', computeBoardSize(640, 700, 140) === computeBoardSize(640, 700), '实际不一致');
+    check('computeBoardSize: NaN/Infinity 非有限输入回退', computeBoardSize(NaN, Infinity, 140) === GRID_SIZE, '实际 ' + computeBoardSize(NaN, Infinity, 140));
+
     return results;
   }
 

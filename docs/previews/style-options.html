@@ -1,0 +1,164 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>v2.0 画风选择预览</title>
+<style>
+  body { font-family: "Microsoft YaHei", sans-serif; background: #111; color: #eee; margin: 0; padding: 24px; }
+  h1 { text-align: center; font-size: 22px; }
+  .row { display: flex; flex-wrap: wrap; gap: 20px; justify-content: center; margin-top: 20px; }
+  .card { background: #1c1c1c; border-radius: 14px; padding: 14px; width: 320px; box-shadow: 0 4px 16px rgba(0,0,0,.5); }
+  .card h2 { text-align: center; font-size: 17px; margin: 6px 0; }
+  .card p { font-size: 13px; color: #bbb; text-align: center; margin: 4px 0 10px; }
+  canvas { width: 100%; height: 220px; border-radius: 10px; display: block; }
+  .tag { display: inline-block; background: #333; border-radius: 6px; padding: 2px 8px; font-size: 12px; color: #ffd400; }
+</style>
+</head>
+<body>
+<h1>v2.0 游戏元素画风对比（A / B / C）</h1>
+<div class="row">
+  <div class="card">
+    <h2>A · 圆润卡通 <span class="tag">圆角 + 表情 + 水果食物</span></h2>
+    <canvas id="cA"></canvas>
+    <p>蛇段圆角、绿色渐变、蛇头有眼睛和舌头；食物是草莓/星星，童趣友好。</p>
+  </div>
+  <div class="card">
+    <h2>B · 流畅曲线 <span class="tag">贝塞尔蛇身 + 渐变</span></h2>
+    <canvas id="cB"></canvas>
+    <p>蛇身用平滑曲线连接、头尾渐变过渡；食物是发光圆点/宝石，动感丝滑。</p>
+  </div>
+  <div class="card">
+    <h2>C · 精致几何 <span class="tag">圆角方块 + 高光阴影</span></h2>
+    <canvas id="cC"></canvas>
+    <p>保留棋盘结构但每格带圆角、高光与投影；食物是发光六边形糖果，清晰精致。</p>
+  </div>
+</div>
+<script>
+function bgStripes(ctx, w, h) {
+  for (let x = -h; x < w + h; x += 28) {
+    ctx.fillStyle = 'rgba(255,255,255,0.05)';
+    ctx.beginPath(); ctx.moveTo(x, h); ctx.lineTo(x + h, 0); ctx.lineTo(x + h + 28, 0); ctx.lineTo(x + 28, h); ctx.closePath(); ctx.fill();
+  }
+}
+function roundRect(ctx, x, y, w, h, r) {
+  r = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+function drawStyleA(ctx, w, h) {
+  bgStripes(ctx, w, h);
+  const segs = [[40,110],[70,110],[100,110],[130,110],[160,110]];
+  for (let i = segs.length - 1; i >= 0; i--) {
+    const [x, y] = segs[i];
+    const g = ctx.createLinearGradient(x, y - 16, x, y + 16);
+    g.addColorStop(0, i === 0 ? '#7CFC00' : '#2E8B57');
+    g.addColorStop(1, i === 0 ? '#32CD32' : '#1B5E20');
+    ctx.fillStyle = g;
+    roundRect(ctx, x - 14, y - 14, 28, 28, 9);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.25)';
+    roundRect(ctx, x - 10, y - 10, 20, 9, 5);
+    ctx.fill();
+  }
+  // head face
+  const hx = segs[0][0], hy = segs[0][1];
+  ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.ellipse(hx + 5, hy - 6, 5, 6, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#222'; ctx.beginPath(); ctx.arc(hx + 6, hy - 6, 2.2, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#c62828'; ctx.lineWidth = 2.5; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(hx + 10, hy + 4); ctx.quadraticCurveTo(hx + 18, hy + 6, hx + 14, hy + 12); ctx.stroke();
+  // strawberry food
+  const fx = 210, fy = 60;
+  ctx.fillStyle = '#ff2d2d';
+  ctx.beginPath(); ctx.moveTo(fx, fy - 12); ctx.quadraticCurveTo(fx + 18, fy - 12, fx + 18, fy + 4); ctx.quadraticCurveTo(fx + 18, fy + 18, fx, fy + 22); ctx.quadraticCurveTo(fx - 18, fy + 18, fx - 18, fy + 4); ctx.quadraticCurveTo(fx - 18, fy - 12, fx, fy - 12); ctx.fill();
+  ctx.fillStyle = '#7cff00'; ctx.beginPath(); ctx.moveTo(fx - 4, fy - 13); ctx.lineTo(fx + 4, fy - 13); ctx.lineTo(fx + 7, fy - 20); ctx.lineTo(fx, fy - 15); ctx.lineTo(fx - 7, fy - 20); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,.7)';
+  ctx.fillRect(fx - 11, fy - 4, 3, 6);
+  ctx.fillRect(fx + 3, fy + 2, 3, 6);
+}
+function drawStyleB(ctx, w, h) {
+  bgStripes(ctx, w, h);
+  const pts = [[40,110],[75,105],[110,115],[145,100],[180,112]];
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  const g = ctx.createLinearGradient(40, 100, 190, 100);
+  g.addColorStop(0, '#7CFC00'); g.addColorStop(0.6, '#00C853'); g.addColorStop(1, '#009688');
+  ctx.strokeStyle = g; ctx.lineWidth = 24;
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) {
+    const mx = (pts[i-1][0] + pts[i][0]) / 2, my = (pts[i-1][1] + pts[i][1]) / 2;
+    ctx.quadraticCurveTo(pts[i-1][0], pts[i-1][1], mx, my);
+  }
+  ctx.quadraticCurveTo(pts[pts.length-2][0], pts[pts.length-2][1], pts[pts.length-1][0], pts[pts.length-1][1]);
+  ctx.stroke();
+  // head
+  const hx = pts[0][0], hy = pts[0][1];
+  ctx.fillStyle = '#B9F6CA';
+  ctx.beginPath(); ctx.arc(hx, hy, 14, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#00C853'; ctx.lineWidth = 3; ctx.stroke();
+  ctx.fillStyle = '#222'; ctx.beginPath(); ctx.arc(hx + 4, hy - 3, 2.4, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#c62828'; ctx.lineWidth = 2.4;
+  ctx.beginPath(); ctx.moveTo(hx + 9, hy + 6); ctx.quadraticCurveTo(hx + 16, hy + 8, hx + 12, hy + 13); ctx.stroke();
+  // gem food
+  const fx = 215, fy = 62;
+  const glow = ctx.createRadialGradient(fx, fy, 2, fx, fy, 24);
+  glow.addColorStop(0, 'rgba(255,45,45,.55)'); glow.addColorStop(1, 'rgba(255,45,45,0)');
+  ctx.fillStyle = glow; ctx.beginPath(); ctx.arc(fx, fy, 24, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#ff5252';
+  ctx.beginPath(); ctx.moveTo(fx, fy - 14); ctx.lineTo(fx + 12, fy); ctx.lineTo(fx, fy + 14); ctx.lineTo(fx - 12, fy); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,.8)';
+  ctx.beginPath(); ctx.moveTo(fx, fy - 14); ctx.lineTo(fx + 6, fy - 4); ctx.lineTo(fx, fy); ctx.closePath(); ctx.fill();
+}
+function drawStyleC(ctx, w, h) {
+  bgStripes(ctx, w, h);
+  const segs = [[40,110],[70,110],[100,110],[130,110],[160,110]];
+  for (let i = segs.length - 1; i >= 0; i--) {
+    const [x, y] = segs[i];
+    ctx.shadowColor = 'rgba(0,0,0,.45)'; ctx.shadowBlur = 8; ctx.shadowOffsetY = 3;
+    const g = ctx.createLinearGradient(x, y - 14, x, y + 14);
+    g.addColorStop(0, i === 0 ? '#66BB6A' : '#388E3C');
+    g.addColorStop(1, i === 0 ? '#2E7D32' : '#1B5E20');
+    ctx.fillStyle = g;
+    roundRect(ctx, x - 14, y - 14, 28, 28, 5);
+    ctx.fill();
+    ctx.shadowColor = 'transparent';
+    ctx.fillStyle = 'rgba(255,255,255,.28)';
+    roundRect(ctx, x - 11, y - 11, 22, 8, 4);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,.18)'; ctx.lineWidth = 1.5;
+    roundRect(ctx, x - 14, y - 14, 28, 28, 5); ctx.stroke();
+  }
+  const hx = segs[0][0], hy = segs[0][1];
+  ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(hx + 4, hy - 5, 4.5, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#222'; ctx.beginPath(); ctx.arc(hx + 5, hy - 5, 2, 0, Math.PI * 2); ctx.fill();
+  // candy food (hexagon with glow)
+  const fx = 212, fy = 64;
+  const g2 = ctx.createRadialGradient(fx, fy, 3, fx, fy, 26);
+  g2.addColorStop(0, 'rgba(255,212,0,.6)'); g2.addColorStop(1, 'rgba(255,212,0,0)');
+  ctx.fillStyle = g2; ctx.beginPath(); ctx.arc(fx, fy, 26, 0, Math.PI * 2); ctx.fill();
+  ctx.shadowColor = '#ffd400'; ctx.shadowBlur = 12;
+  ctx.fillStyle = '#ffd400';
+  ctx.beginPath();
+  for (let k = 0; k < 6; k++) {
+    const a = Math.PI / 180 * (60 * k - 90);
+    const px = fx + 13 * Math.cos(a), py = fy + 13 * Math.sin(a);
+    if (k === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.closePath(); ctx.fill();
+  ctx.shadowColor = 'transparent';
+  ctx.fillStyle = 'rgba(255,255,255,.75)';
+  ctx.beginPath(); ctx.arc(fx - 3, fy - 4, 3.5, 0, Math.PI * 2); ctx.fill();
+}
+const A = document.getElementById('cA'), B = document.getElementById('cB'), C = document.getElementById('cC');
+[A, B, C].forEach(c => { c.width = 320; c.height = 220; });
+drawStyleA(A.getContext('2d'), 320, 220);
+drawStyleB(B.getContext('2d'), 320, 220);
+drawStyleC(C.getContext('2d'), 320, 220);
+</script>
+</body>
+</html>
