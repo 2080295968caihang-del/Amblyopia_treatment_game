@@ -59,7 +59,9 @@ const modeBoxes = (html.match(/name="mode"\s+value="([a-z_]+)"/g) || []).map(fun
 const cmRadios = (html.match(/name="colorMode"\s+value="([a-z]+)"/g) || []).map(function (m) { return m.match(/value="([a-z]+)"/)[1]; });
 const ssRadios = (html.match(/name="startSpeed"\s+value="(\d)"/g) || []).map(function (m) { return m.match(/\d/)[0]; });
 check('S8 flicker radios 0/1/2', flRadios.join(',') === '0,1,2', flRadios.join(','));
-check('S8b mode checkboxes = 4 保留模式', modeBoxes.join(',') === 'red_flicker,cam_grating,checkerboard,stripes', modeBoxes.join(','));
+check('S8b mode checkboxes = 3 保留模式', modeBoxes.join(',') === 'cam_grating,checkerboard,stripes', modeBoxes.join(','));
+const controlModeRadios = (html.match(/name="controlMode"\s+value="([a-z]+)"/g) || []).map(function (m) { return m.match(/value="([a-z]+)"/)[1]; });
+check('S8b2 controlMode radios keyboard/mouse/both', controlModeRadios.join(',') === 'keyboard,mouse,both', controlModeRadios.join(','));
 check('S8c colorMode contrast/mixed', cmRadios.join(',') === 'contrast,mixed', cmRadios.join(','));
 check('S8d startSpeed 1-5', ssRadios.join(',') === '1,2,3,4,5', ssRadios.join(','));
 check('S8e bg toggles + sound + note',
@@ -73,9 +75,9 @@ check('S9 eye reminder >=2 places + role=note', eyeCount >= 2 && html.indexOf(ey
 check('S10 no alert( popup', !/alert\s*\(/.test(allSrc));
 
 // S11: 背景引擎
-check('S11 bg-engine 4 modes (no dots/fun_shapes)',
-  /MODE_IDS\s*=\s*\['red_flicker',\s*'cam_grating',\s*'checkerboard',\s*'stripes'\]/.test(bgEngineSrc) &&
-  !/function drawFunShapes/.test(bgEngineSrc) && !/function drawDots/.test(bgEngineSrc));
+check('S11 bg-engine 3 modes (no red_flicker/dots/fun_shapes)',
+  /MODE_IDS\s*=\s*\['cam_grating',\s*'checkerboard',\s*'stripes'\]/.test(bgEngineSrc) &&
+  !/function drawRedFlicker/.test(bgEngineSrc) && !/function drawFunShapes/.test(bgEngineSrc) && !/function drawDots/.test(bgEngineSrc));
 const rot = /BG_ROTATE_MS\s*=\s*(\d+)/.exec(bgEngineSrc);
 const fade = /BG_CROSSFADE_MS\s*=\s*(\d+)/.exec(bgEngineSrc);
 const cMin = /BG_COLOR_MIN_MS\s*=\s*(\d+)/.exec(bgEngineSrc);
@@ -92,7 +94,7 @@ check('S13 snake G-style anchors', ['drawRoundCell', 'fillEllipse', 'backToMenu'
 check('S13b snake settings/highscore keys',
   snakeSrc.indexOf('amblyopia_snake_settings_v1') !== -1 && snakeSrc.indexOf('amblyopia_snake_highscore_v1') !== -1 &&
   /function loadSettings/.test(snakeSrc) && /function saveSettings/.test(snakeSrc));
-check('S13c v1.0 6→4 modes compat', /saved\.modes\.length === 6/.test(snakeSrc) && /saved\.modes\[4\]/.test(snakeSrc));
+check('S13c v1.0 6→3 modes compat', /saved\.modes\.length === 6/.test(snakeSrc) && /saved\.modes\[4\]/.test(snakeSrc) && /saved\.modes\.length === 4/.test(snakeSrc));
 check('S13d sound + HUD', /function shouldPlaySound/.test(snakeSrc) && snakeSrc.indexOf('btnMute') !== -1 && snakeSrc.indexOf('soundOnEl') !== -1);
 check('S13e speed step 5 + MAX_SPEED_LEVEL', /SPEED_STEP\s*=\s*5/.test(snakeSrc) && /MAX_SPEED_LEVEL/.test(snakeSrc));
 check('S13f mouse + touch handlers', /mousemove/.test(snakeSrc) && /mousedown/.test(snakeSrc) && /mouseup/.test(snakeSrc) && /handleTouchStart/.test(snakeSrc) && /handleTouchEnd/.test(snakeSrc));
@@ -165,7 +167,8 @@ const groups = {};
 function buildGroup(name) {
   let list = [];
   if (name === 'flickerLevel') list = ['0', '1', '2'];
-  else if (name === 'mode') list = ['red_flicker', 'cam_grating', 'checkerboard', 'stripes'];
+  else if (name === 'mode') list = ['cam_grating', 'checkerboard', 'stripes'];
+  else if (name === 'controlMode') list = ['keyboard', 'mouse', 'both'];
   else if (name === 'colorMode') list = ['contrast', 'mixed'];
   else if (name === 'startSpeed') list = ['1', '2', '3', '4', '5'];
   return list.map(function (v) {
@@ -259,11 +262,11 @@ check('SMK2 ?test=1 banner rendered PASS', /PASS/i.test(banner.textContent), ban
 check('SMK3 banner unhidden', !banner.classList.contains('hidden'));
 
 // v1.0 6→4 兼容映射验证
-check('SMK3b v1.0 6项modes映射为新4项', (function () {
+check('SMK3b v1.0 6项modes映射为新3项', (function () {
   const s = SG.getSettings();
-  return s.modes.length === 4 && s.modes[0] === true && s.modes[1] === false && s.modes[2] === true && s.modes[3] === true &&
-    s.flickerLevel === 0 && s.startSpeed === 3;
-})(), 'modes=' + JSON.stringify(SG.getSettings().modes));
+  return s.modes.length === 3 && s.modes[0] === false && s.modes[1] === true && s.modes[2] === true &&
+    s.controlMode === 'both' && s.flickerLevel === 0 && s.startSpeed === 3;
+})(), 'modes=' + JSON.stringify(SG.getSettings().modes) + ' control=' + SG.getSettings().controlMode);
 
 const menuScreen = getEl('menuScreen'), gameScreen = getEl('gameScreen'),
   endOverlay = getEl('endOverlay'), gameMenuOverlay = getEl('gameMenuOverlay'),
@@ -309,6 +312,12 @@ try {
   flickerRadios[0].dispatch('change');
   const saved1 = lsStore['amblyopia_snake_settings_v1'] || '';
   check('SMK11 flicker level change persisted', saved1.indexOf('"flickerLevel":0') !== -1, saved1.slice(0, 160));
+
+  const controlRadios = groups['controlMode'];
+  controlRadios[0].checked = true; // keyboard
+  controlRadios[0].dispatch('change');
+  const savedCM = lsStore['amblyopia_snake_settings_v1'] || '';
+  check('SMK11b controlMode change persisted', savedCM.indexOf('"controlMode":"keyboard"') !== -1, savedCM.slice(0, 160));
 
   soundOn.checked = false;
   soundOn.dispatch('change');
