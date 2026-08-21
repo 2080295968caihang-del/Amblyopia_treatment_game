@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>弱视治疗贪吃蛇</title>
+<style>
+/* ===== 全局与高对比配色 ===== */
+:root {
+  --color-bg: #000000;
+  --color-fg: #ffffff;
+  --color-accent: #ffd400;
+  --color-danger: #ff2d2d;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  width: 100%;
+  height: 100%;
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family: "Microsoft YaHei", "PingFang SC", "Helvetica Neue", Arial, sans-serif;
+  overflow: hidden;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.hidden { display: none !important; }
+
+/* ===== 屏幕容器 ===== */
+.screen {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 16px;
+  text-align: center;
+  z-index: 1;
+}
+
+/* ===== 通用按钮 ===== */
+.btn {
+  font-size: clamp(20px, 3vmin, 28px);
+  font-weight: bold;
+  padding: 14px 34px;
+  border-radius: 12px;
+  border: 3px solid var(--color-accent);
+  background: transparent;
+  color: var(--color-accent);
+  cursor: pointer;
+  transition: filter 0.15s, transform 0.05s;
+}
+.btn:hover { filter: brightness(1.15); }
+.btn:active { transform: scale(0.97); }
+.btn-primary {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #000000;
+}
+
+/* ===== 自测横幅 ===== */
+#testBanner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  padding: 8px 12px;
+  text-align: center;
+  font-size: 18px;
+  font-weight: bold;
+}
+#testBanner.test-pass { background: #005500; color: #ffffff; }
+#testBanner.test-fail { background: #770000; color: #ffffff; }
+
+/* ===== 开始屏 ===== */
+#startScreen h1 {
+  font-size: clamp(32px, 6vmin, 64px);
+  letter-spacing: 4px;
+  color: var(--color-accent);
+  text-shadow: 0 0 18px rgba(255, 212, 0, 0.5);
+}
+.eye-reminder {
+  max-width: 640px;
+  font-size: clamp(20px, 3.4vmin, 32px);
+  font-weight: bold;
+  color: var(--color-fg);
+  background: #1a1a00;
+  border: 3px solid var(--color-accent);
+  border-radius: 14px;
+  padding: 12px 24px;
+}
+.high-score {
+  font-size: clamp(18px, 3vmin, 28px);
+  color: var(--color-fg);
+}
+.high-score span {
+  color: var(--color-accent);
+  font-size: 1.25em;
+  font-weight: bold;
+}
+.btn-group {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+/* ===== 游戏屏 ===== */
+#gameScreen {
+  justify-content: flex-start;
+  gap: 10px;
+  padding-top: 10px;
+}
+.hud {
+  width: 100%;
+  max-width: 900px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: clamp(16px, 2.6vmin, 24px);
+  font-weight: bold;
+}
+.hud .stat { display: flex; align-items: center; gap: 6px; }
+.hud .stat span { color: var(--color-accent); }
+.hud .btn {
+  font-size: clamp(14px, 2.2vmin, 20px);
+  padding: 8px 16px;
+  border-width: 2px;
+}
+.board-wrap {
+  position: relative;
+  width: min(90vmin, 640px);
+  aspect-ratio: 1 / 1;
+  background: #000000;
+  border: 3px solid var(--color-accent);
+  touch-action: none; /* 触控预留：避免触摸滚动干扰后续触控操控 */
+}
+#bgCanvas,
+#gameCanvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.small-tip {
+  font-size: clamp(13px, 2vmin, 18px);
+  color: #cccccc;
+}
+
+/* ===== 结束浮层 ===== */
+.mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  z-index: 9;
+}
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.overlay-card {
+  min-width: min(320px, 86vw);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 28px 40px;
+  background: #111111;
+  border: 3px solid var(--color-accent);
+  border-radius: 16px;
+  font-size: clamp(18px, 2.8vmin, 26px);
+}
+.overlay-card h2 { color: var(--color-danger); }
+.overlay-card .stat span { color: var(--color-accent); font-weight: bold; }
+
+/* ===== 设置抽屉 ===== */
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 11;
+  width: min(380px, 92vw);
+  padding: 20px 22px;
+  background: #101010;
+  border-left: 3px solid var(--color-accent);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  font-size: clamp(15px, 2.4vmin, 20px);
+}
+.drawer h2 {
+  color: var(--color-accent);
+  border-bottom: 2px solid #333333;
+  padding-bottom: 8px;
+}
+.drawer-close {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  background: none;
+  border: none;
+  color: var(--color-fg);
+  font-size: 26px;
+  line-height: 1;
+  cursor: pointer;
+}
+.setting-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 2px solid #333333;
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+.setting-group legend {
+  color: var(--color-accent);
+  font-weight: bold;
+  padding: 0 6px;
+}
+.option-row {
+  display: flex;
+  align-items: center;
+  gap: 10px 16px;
+  flex-wrap: wrap;
+}
+.option-row label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+input[type="radio"],
+input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--color-accent);
+  cursor: pointer;
+}
+</style>
+</head>
+<body>
+<!-- 自测结果横幅（?test=1 时由脚本填充并显示） -->
+<div id="testBanner" class="hidden"></div>
+
+<!-- 开始屏 -->
+<div id="startScreen" class="screen">
+  <h1>弱视治疗贪吃蛇</h1>
+  <p class="eye-reminder">请先遮盖好眼，只用弱视眼看</p>
+  <div class="high-score">最高分：<span id="startHighScore">0</span></div>
+  <div class="btn-group">
+    <button id="btnStart" class="btn btn-primary" type="button">开始游戏</button>
+    <button id="btnOpenSettings" class="btn" type="button">家长设置</button>
+  </div>
+</div>
+
+<!-- 游戏屏：底层刺激背景 + 中层蛇/食物 -->
+<div id="gameScreen" class="screen hidden">
+  <div class="hud">
+    <div class="stat">分数 <span id="hudScore">0</span></div>
+    <div class="stat">最高 <span id="hudHighScore">0</span></div>
+    <div class="stat">速度 <span id="hudSpeed">1</span></div>
+    <div class="stat">
+      <button id="btnPause" class="btn" type="button">暂停</button>
+      <button id="btnMute" class="btn" type="button">静音</button>
+    </div>
+  </div>
+  <div class="board-wrap">
+    <canvas id="bgCanvas" width="630" height="630"></canvas>
+    <canvas id="gameCanvas" width="630" height="630"></canvas>
+  </div>
+  <p class="small-tip">遮盖好眼，只用弱视眼看</p>
+</div>
+
+<!-- 结束浮层 -->
+<div id="endOverlay" class="overlay hidden">
+  <div class="overlay-card">
+    <h2>游戏结束</h2>
+    <div class="stat">本次分数 <span id="endScore">0</span></div>
+    <div class="stat">最高分 <span id="endHighScore">0</span></div>
+    <button id="btnRestart" class="btn btn-primary" type="button">再玩一次</button>
+  </div>
+</div>
+
+<!-- 设置抽屉遮罩 -->
+<div id="drawerMask" class="mask hidden"></div>
+
+<!-- 家长设置抽屉 -->
+<aside id="settingsDrawer" class="drawer hidden" role="dialog" aria-label="家长设置">
+  <button id="btnDrawerClose" class="drawer-close" type="button" aria-label="关闭设置">×</button>
+  <h2>家长设置</h2>
+
+  <fieldset class="setting-group">
+    <legend>闪烁档位</legend>
+    <div class="option-row">
+      <label><input type="radio" name="flickerLevel" value="0"> 慢 0.95Hz</label>
+      <label><input type="radio" name="flickerLevel" value="1" checked> 中 1.4Hz</label>
+      <label><input type="radio" name="flickerLevel" value="2"> 快 2.4Hz</label>
+    </div>
+  </fieldset>
+
+  <fieldset class="setting-group">
+    <legend>刺激模式（勾选参与轮换）</legend>
+    <div class="option-row">
+      <label><input type="checkbox" name="mode" value="red_flicker" checked> 红光闪烁</label>
+      <label><input type="checkbox" name="mode" value="cam_grating" checked> CAM 光栅</label>
+      <label><input type="checkbox" name="mode" value="checkerboard" checked> 棋盘格</label>
+      <label><input type="checkbox" name="mode" value="dots" checked> 圆点阵列</label>
+      <label><input type="checkbox" name="mode" value="stripes" checked> 对比条纹</label>
+      <label><input type="checkbox" name="mode" value="fun_shapes" checked> 童趣图案</label>
+    </div>
+  </fieldset>
+
+  <fieldset class="setting-group">
+    <legend>配色模式</legend>
+    <div class="option-row">
+      <label><input type="radio" name="colorMode" value="contrast" checked> 高对比</label>
+      <label><input type="radio" name="colorMode" value="mixed"> 混合（带彩色点缀）</label>
+    </div>
+  </fieldset>
+
+  <fieldset class="setting-group">
+    <legend>起始速度</legend>
+    <div class="option-row">
+      <label><input type="radio" name="startSpeed" value="1"> 1 很慢</label>
+      <label><input type="radio" name="startSpeed" value="2" checked> 2 慢</label>
+      <label><input type="radio" name="startSpeed" value="3"> 3 中</label>
+      <label><input type="radio" name="startSpeed" value="4"> 4 快</label>
+      <label><input type="radio" name="startSpeed" value="5"> 5 很快</label>
+    </div>
+  </fieldset>
+
+  <fieldset class="setting-group">
+    <legend>音效</legend>
+    <div class="option-row">
+      <label><input type="checkbox" id="soundOn" checked> 开启音效</label>
+    </div>
+  </fieldset>
+
+  <fieldset class="setting-group">
+    <legend>背景变化开关</legend>
+    <div class="option-row">
+      <label><input type="checkbox" id="colorChange" checked> 颜色变化</label>
+      <label><input type="checkbox" id="shapeChange" checked> 形状变化</label>
+      <label><input type="checkbox" id="flickerChange" checked> 闪烁</label>
+    </div>
+  </fieldset>
+</aside>
+
+<script>
+/* =========================================================
+ * 弱视治疗贪吃蛇 · 骨架与自测框架
+ * 常量与核心纯函数零依赖，可在 Node 中直接运行。
+ * ========================================================= */
+
+/* ---------- 常量 ---------- */
+const GRID_SIZE = 21;                  // 21×21 网格
+const SPEED_START_MS = 180;            // 起始速度（毫秒/格，默认中慢）
+const SPEED_MIN_MS = 60;               // 速度上限（最快）
+const SPEED_STEP = 5;                  // 每吃 5 个食物升一档
+const SPEED_DELTA_MS = 20;             // 每升一档速度减少的毫秒数
+const FLICKER_LEVELS = [0.95, 1.4, 2.4]; // 慢/中/快 Hz
+
+/* ---------- 核心纯函数 ---------- */
+// 方向 → 单位向量
+function dirToVector(dir) {
+  const VECTORS = {
+    up: { x: 0, y: -1 },
+    down: { x: 0, y: 1 },
+    left: { x: -1, y: 0 },
+    right: { x: 1, y: 0 }
+  };
+  return VECTORS[dir] || { x: 0, y: 0 };
+}
+
+// 返回头部沿方向移动一格后的坐标
+function nextHead(head, dir) {
+  const v = dirToVector(dir);
+  return { x: head.x + v.x, y: head.y + v.y };
+}
+
+// 越界判断（0 ≤ 坐标 < GRID_SIZE）
+function isWallCollision(head) {
+  return head.x < 0 || head.x >= GRID_SIZE || head.y < 0 || head.y >= GRID_SIZE;
+}
+
+// 撞自身判断（head 为移动后的新头，与蛇身任一段重叠即算）
+function isSelfCollision(head, snake) {
+  return snake.some(function (seg) {
+    return seg.x === head.x && seg.y === head.y;
+  });
+}
+
+// 在非蛇身位置随机生成食物
+function randomFoodCell(snake) {
+  const occupied = {};
+  for (let i = 0; i < snake.length; i++) {
+    occupied[snake[i].x + ',' + snake[i].y] = true;
+  }
+  const free = [];
+  for (let y = 0; y < GRID_SIZE; y++) {
+    for (let x = 0; x < GRID_SIZE; x++) {
+      if (!occupied[x + ',' + y]) free.push({ x: x, y: y });
+    }
+  }
+  if (free.length === 0) return null; // 棋盘被蛇占满的极端情况
+  return free[Math.floor(Math.random() * free.length)];
+}
+
+// 每吃 SPEED_STEP 个食物降一档速度（毫秒/格），最低不低于 SPEED_MIN_MS
+function speedForLevel(foodsEaten) {
+  const level = Math.floor(foodsEaten / SPEED_STEP);
+  return Math.max(SPEED_MIN_MS, SPEED_START_MS - level * SPEED_DELTA_MS);
+}
+
+// 闪烁频率档位映射：0/1/2 → 0.95/1.4/2.4 Hz，越界时回退到最快档
+function flickerHzForLevel(level) {
+  if (level < 0 || level >= FLICKER_LEVELS.length) return FLICKER_LEVELS[FLICKER_LEVELS.length - 1];
+  return FLICKER_LEVELS[level];
+}
+
+/* ---------- 自测框架 ---------- */
+// 运行全部自测，返回 [{pass, name, detail?}]，纯逻辑、无 DOM 依赖
+function runSelfTests() {
+  const results = [];
+
+  // 断言辅助：追加一条测试结果
+  function check(name, cond, detail) {
+    results.push({ pass: !!cond, name: name, detail: cond ? undefined : detail });
+  }
+
+  // 坐标点相等比较
+  function samePoint(a, b) {
+    return !!a && !!b && a.x === b.x && a.y === b.y;
+  }
+
+  // ---- dirToVector：四个方向 ----
+  check('dirToVector: up → {0,-1}', samePoint(dirToVector('up'), { x: 0, y: -1 }), '实际 ' + JSON.stringify(dirToVector('up')));
+  check('dirToVector: down → {0,1}', samePoint(dirToVector('down'), { x: 0, y: 1 }), '实际 ' + JSON.stringify(dirToVector('down')));
+  check('dirToVector: left → {-1,0}', samePoint(dirToVector('left'), { x: -1, y: 0 }), '实际 ' + JSON.stringify(dirToVector('left')));
+  check('dirToVector: right → {1,0}', samePoint(dirToVector('right'), { x: 1, y: 0 }), '实际 ' + JSON.stringify(dirToVector('right')));
+
+  // ---- nextHead：移动后的头部坐标 ----
+  check('nextHead: 右移一格', samePoint(nextHead({ x: 5, y: 5 }, 'right'), { x: 6, y: 5 }), '实际 ' + JSON.stringify(nextHead({ x: 5, y: 5 }, 'right')));
+  check('nextHead: 上移一格', samePoint(nextHead({ x: 5, y: 5 }, 'up'), { x: 5, y: 4 }), '实际 ' + JSON.stringify(nextHead({ x: 5, y: 5 }, 'up')));
+  check('nextHead: 左移越过左边界', samePoint(nextHead({ x: 0, y: 5 }, 'left'), { x: -1, y: 5 }), '实际 ' + JSON.stringify(nextHead({ x: 0, y: 5 }, 'left')));
+  check('nextHead: 下移越过下边界', samePoint(nextHead({ x: 5, y: GRID_SIZE - 1 }, 'down'), { x: 5, y: GRID_SIZE }), '实际 ' + JSON.stringify(nextHead({ x: 5, y: GRID_SIZE - 1 }, 'down')));
+
+  // ---- isWallCollision：边界 ----
+  check('isWallCollision: 左上角界内', !isWallCollision({ x: 0, y: 0 }), '实际 true');
+  check('isWallCollision: 右下角界内', !isWallCollision({ x: GRID_SIZE - 1, y: GRID_SIZE - 1 }), '实际 true');
+  check('isWallCollision: 左越界', isWallCollision({ x: -1, y: 5 }), '实际 false');
+  check('isWallCollision: 右越界', isWallCollision({ x: GRID_SIZE, y: 5 }), '实际 false');
+  check('isWallCollision: 上越界', isWallCollision({ x: 5, y: -1 }), '实际 false');
+  check('isWallCollision: 下越界', isWallCollision({ x: 5, y: GRID_SIZE }), '实际 false');
+
+  // ---- isSelfCollision：撞自身（含新头） ----
+  const body = [{ x: 3, y: 3 }, { x: 3, y: 4 }, { x: 2, y: 4 }];
+  check('isSelfCollision: 新头撞到身体', isSelfCollision({ x: 2, y: 4 }, body), '实际 false');
+  check('isSelfCollision: 新头与旧头重叠', isSelfCollision({ x: 3, y: 3 }, body), '实际 false');
+  check('isSelfCollision: 未撞自身', !isSelfCollision({ x: 4, y: 4 }, body), '实际 true');
+
+  // ---- randomFoodCell：不在蛇身、且在网格内 ----
+  {
+    const snake = [];
+    for (let y = 0; y < GRID_SIZE; y++) {
+      for (let x = 0; x < GRID_SIZE; x++) {
+        if ((x + y) % 2 === 0) snake.push({ x: x, y: y });
+      }
+    }
+    let foodOk = true;
+    let failDetail = '';
+    for (let i = 0; i < 200 && foodOk; i++) {
+      const f = randomFoodCell(snake);
+      const inGrid = f && f.x >= 0 && f.x < GRID_SIZE && f.y >= 0 && f.y < GRID_SIZE;
+      const onSnake = f && snake.some((s) => s.x === f.x && s.y === f.y);
+      if (!inGrid || onSnake) {
+        foodOk = false;
+        failDetail = '生成食物 ' + JSON.stringify(f) + ' 非法';
+      }
+    }
+    check('randomFoodCell: 200 次均不在蛇身且在网格内', foodOk, failDetail);
+  }
+
+  // ---- speedForLevel：单调不增且有下限 ----
+  {
+    let monotonic = true;
+    let aboveFloor = true;
+    for (let n = 0; n < 120; n++) {
+      if (speedForLevel(n) < speedForLevel(n + 1)) monotonic = false;
+      if (speedForLevel(n) < SPEED_MIN_MS) aboveFloor = false;
+    }
+    check('speedForLevel: 随食物数单调不增', monotonic, '出现增档');
+    check('speedForLevel: 不低于速度下限', aboveFloor, '低于 ' + SPEED_MIN_MS + 'ms');
+    check('speedForLevel: 0 个食物时为起始速度', speedForLevel(0) === SPEED_START_MS, '实际 ' + speedForLevel(0));
+    check('speedForLevel: 食物足够多时到达速度下限', speedForLevel(120) === SPEED_MIN_MS, '实际 ' + speedForLevel(120));
+  }
+
+  // ---- flickerHzForLevel：三档映射 ----
+  check('flickerHzForLevel: 0 → 0.95Hz', flickerHzForLevel(0) === 0.95, '实际 ' + flickerHzForLevel(0));
+  check('flickerHzForLevel: 1 → 1.4Hz', flickerHzForLevel(1) === 1.4, '实际 ' + flickerHzForLevel(1));
+  check('flickerHzForLevel: 2 → 2.4Hz', flickerHzForLevel(2) === 2.4, '实际 ' + flickerHzForLevel(2));
+
+  return results;
+}
+
+// 把测试结果输出到 console
+function logSelfTestResults(results) {
+  let pass = 0;
+  let fail = 0;
+  for (let i = 0; i < results.length; i++) {
+    if (results[i].pass) {
+      pass++;
+      console.log('  PASS ' + results[i].name);
+    } else {
+      fail++;
+      console.log('  FAIL ' + results[i].name + (results[i].detail ? ' -- ' + results[i].detail : ''));
+    }
+  }
+  console.log('SELF-TEST PASS ' + pass + '/FAIL ' + fail);
+}
+
+// 把测试结果渲染到页面顶部横幅
+function renderSelfTestBanner(results) {
+  let pass = 0;
+  let fail = 0;
+  for (let i = 0; i < results.length; i++) {
+    if (results[i].pass) pass++;
+    else fail++;
+  }
+  const banner = document.getElementById('testBanner');
+  if (banner) {
+    banner.textContent = 'SELF-TEST PASS (' + pass + ')/FAIL (' + fail + ')';
+    banner.classList.remove('hidden');
+    banner.classList.add(fail === 0 ? 'test-pass' : 'test-fail');
+  }
+}
+
+/* ---------- 浏览器端初始化（Node 下自动跳过） ---------- */
+if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+  // 后续任务在此接入游戏循环、输入、背景、设置、音效与界面流程
+  if (window.location && window.location.search && window.location.search.indexOf('test=1') !== -1) {
+    const selfTestResults = runSelfTests();
+    logSelfTestResults(selfTestResults);
+    renderSelfTestBanner(selfTestResults);
+  }
+}
+
+/* ---------- 无头验证接口（verify_snake.js 使用） ---------- */
+globalThis.__snakeTests = {
+  runSelfTests: runSelfTests
+};
+</script>
+</body>
+</html>
