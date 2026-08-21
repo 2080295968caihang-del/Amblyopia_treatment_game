@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>弱视治疗贪吃蛇</title>
 <style>
 /* ===== 全局与高对比配色 ===== */
@@ -119,7 +119,10 @@ html, body {
 #gameScreen {
   justify-content: flex-start;
   gap: 10px;
-  padding-top: 10px;
+  padding-top: max(10px, env(safe-area-inset-top));
+  padding-left: max(16px, env(safe-area-inset-left));
+  padding-right: max(16px, env(safe-area-inset-right));
+  padding-bottom: max(16px, env(safe-area-inset-bottom));
 }
 .hud {
   width: 100%;
@@ -129,6 +132,8 @@ html, body {
   justify-content: space-between;
   gap: 10px;
   flex-wrap: wrap;
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
   font-size: clamp(16px, 2.6vmin, 24px);
   font-weight: bold;
 }
@@ -141,10 +146,11 @@ html, body {
 }
 .board-wrap {
   position: relative;
-  width: min(90vmin, 640px);
   aspect-ratio: 1 / 1;
   background: #000000;
   border: 3px solid var(--color-accent);
+  margin-left: env(safe-area-inset-left);
+  margin-right: env(safe-area-inset-right);
   touch-action: none; /* 触控预留：避免触摸滚动干扰后续触控操控 */
 }
 #bgCanvas,
@@ -478,12 +484,16 @@ function speedLevelForDisplay(foodsEaten, baseMs) {
   return Math.min(Math.max(level, 1), MAX_SPEED_LEVEL);
 }
 
-// 自适应棋盘边长（CSS 像素，Task 7）：取 min(视口宽, 视口高 - 预留高度)，向下取整到
-// GRID_SIZE 的整数倍，保证每格是整数像素；视口过小时至少保留一格的边长。
+// 自适应棋盘边长（CSS 像素，Task 7 + 审查加固）：取 min(视口宽, 视口高 - 预留高度)，
+// 向下取整到 GRID_SIZE 的整数倍（每格整数像素），并封顶 MAX_BOARD_CSS；
+// 视口过小时至少保留一格的边长；非有限输入回退到安全最小值。
 const LAYOUT_RESERVED_H = 140;  // HUD + 常驻遮眼提示 + 边距预留高度（CSS 像素）
+const MAX_BOARD_CSS = 720;      // 棋盘最大边长上限（CSS 像素）
 function computeBoardSize(viewportW, viewportH, reservedH) {
-  const reserved = typeof reservedH === 'number' && reservedH >= 0 ? reservedH : LAYOUT_RESERVED_H;
-  const available = Math.min(viewportW, viewportH - reserved);
+  const w = Number.isFinite(viewportW) ? viewportW : 0;
+  const h = Number.isFinite(viewportH) ? viewportH : 0;
+  const reserved = Number.isFinite(reservedH) && reservedH >= 0 ? reservedH : LAYOUT_RESERVED_H;
+  const available = Math.min(w, h - reserved, MAX_BOARD_CSS);
   const cells = Math.max(1, Math.floor(available / GRID_SIZE));
   return cells * GRID_SIZE;
 }
@@ -1639,23 +1649,27 @@ function runSelfTests() {
     try { eatSound(); overSound(); return true; } catch (e) { return false; }
   })(), '调用抛出异常');
 
-  // ---- 自适应缩放：computeBoardSize（Task 7）----
-  check('computeBoardSize: 返回值始终是 GRID_SIZE 的整数倍', (function () {
+  // ---- 自适应缩放：computeBoardSize（Task 7 + 审查加固）----
+  check('computeBoardSize: 返回值是 GRID_SIZE 整数倍且不超 MAX_BOARD_CSS', (function () {
     const cases = [[1920, 1080], [1080, 1920], [1024, 768], [768, 1024], [320, 480], [640, 600], [2560, 1440], [390, 844]];
     for (let i = 0; i < cases.length; i++) {
       const size = computeBoardSize(cases[i][0], cases[i][1], 140);
-      if (size % GRID_SIZE !== 0 || size < GRID_SIZE) return false;
+      if (size % GRID_SIZE !== 0 || size < GRID_SIZE || size > MAX_BOARD_CSS) return false;
     }
     return true;
-  })(), '出现非整数倍或小于单格');
-  check('computeBoardSize: 横屏 1920×1080 以高度为约束', computeBoardSize(1920, 1080, 140) === 924, '实际 ' + computeBoardSize(1920, 1080, 140));
-  check('computeBoardSize: 竖屏 1080×1920 以宽度为约束', computeBoardSize(1080, 1920, 140) === 1071, '实际 ' + computeBoardSize(1080, 1920, 140));
-  check('computeBoardSize: 平板横屏 1024×768', computeBoardSize(1024, 768, 140) === 609, '实际 ' + computeBoardSize(1024, 768, 140));
-  check('computeBoardSize: 平板竖屏 768×1024', computeBoardSize(768, 1024, 140) === 756, '实际 ' + computeBoardSize(768, 1024, 140));
+  })(), '出现越界边长');
+  check('computeBoardSize: 横屏大屏 1920×1080 封顶', computeBoardSize(1920, 1080, 140) === Math.floor(MAX_BOARD_CSS / GRID_SIZE) * GRID_SIZE, '实际 ' + computeBoardSize(1920, 1080, 140));
+  check('computeBoardSize: 竖屏大屏 1080×1920 封顶', computeBoardSize(1080, 1920, 140) === Math.floor(MAX_BOARD_CSS / GRID_SIZE) * GRID_SIZE, '实际 ' + computeBoardSize(1080, 1920, 140));
+  check('computeBoardSize: 平板横屏 1024×768 以高度为约束', computeBoardSize(1024, 768, 140) === 609, '实际 ' + computeBoardSize(1024, 768, 140));
+  check('computeBoardSize: 平板竖屏 768×1024 封顶', computeBoardSize(768, 1024, 140) === Math.floor(MAX_BOARD_CSS / GRID_SIZE) * GRID_SIZE, '实际 ' + computeBoardSize(768, 1024, 140));
   check('computeBoardSize: 高度受限时取 高-预留', computeBoardSize(1920, 600, 140) === 441, '实际 ' + computeBoardSize(1920, 600, 140));
   check('computeBoardSize: 小视口回退到单格边长', computeBoardSize(20, 500, 100) === GRID_SIZE, '实际 ' + computeBoardSize(20, 500, 100));
   check('computeBoardSize: 视口小于预留高度仍不小于单格', computeBoardSize(100, 50, 140) === GRID_SIZE, '实际 ' + computeBoardSize(100, 50, 140));
   check('computeBoardSize: 预留高度缺省时用默认值', computeBoardSize(640, 700, 140) === computeBoardSize(640, 700), '实际不一致');
+  check('computeBoardSize: NaN/Infinity 非有限输入回退', (function () {
+    return computeBoardSize(NaN, NaN, NaN) === GRID_SIZE &&
+      computeBoardSize(Infinity, Infinity, 140) === GRID_SIZE;
+  })(), '未回退到安全值');
 
   return results;
 }
@@ -2232,28 +2246,54 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   function handleTouchMove(e) { /* 平板 WebView 接入点：预留 */ }
   function handleTouchEnd(e) { /* 平板 WebView 接入点：预留 */ }
 
-  // ---- 自适应缩放（Task 7）：棋盘按 min(视口宽, 高-预留) 等比缩放，resize 时重算 ----
-  // #gameCanvas 与 #bgCanvas 同步内部分辨率（× devicePixelRatio 保证清晰度），
-  // 显示尺寸由 .board-wrap 宽度控制（CSS 像素），随窗口 / 横竖屏切换自动更新。
+  // ---- 自适应缩放（Task 7 + 审查加固）：棋盘按 min(视口宽, 高-预留) 等比缩放并封顶 ----
+  // #gameCanvas 与 #bgCanvas 同步内部分辨率：× devicePixelRatio 后向下取整到 GRID_SIZE
+  // 整数倍（每格整数设备像素，清晰度最佳）；显示尺寸由 .board-wrap 宽度控制（CSS 像素）。
   function applyResponsiveLayout() {
     const wrap = document.querySelector('.board-wrap');
     if (!wrap) return;
     const boardCss = computeBoardSize(window.innerWidth, window.innerHeight, LAYOUT_RESERVED_H);
     wrap.style.width = boardCss + 'px';
     const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
-    const canvasPx = Math.max(1, Math.round(boardCss * dpr));
+    const canvasPx = Math.max(1, Math.round(boardCss * dpr / GRID_SIZE) * GRID_SIZE);
+    let sizeChanged = false;
     if (bgCanvasEl && (bgCanvasEl.width !== canvasPx || bgCanvasEl.height !== canvasPx)) {
       bgCanvasEl.width = canvasPx;
       bgCanvasEl.height = canvasPx;
       bgGeomDirty = true; // 尺寸变化：按同一种子重建几何
+      sizeChanged = true;
     }
     if (gameCanvasEl && (gameCanvasEl.width !== canvasPx || gameCanvasEl.height !== canvasPx)) {
       gameCanvasEl.width = canvasPx;
       gameCanvasEl.height = canvasPx;
+      sizeChanged = true;
+    }
+    // 重设 canvas 尺寸会清空位图：运行中由主循环/背景循环下一帧补画；
+    // 暂停或未运行时循环不会渲染，需立即补画（暂停用冻结相位，避免恢复后相位跳变）。
+    if (sizeChanged && (!state.running || state.paused)) {
+      renderGame();
+      if (bgCanvasEl) {
+        ensureBgGeom();
+        const ctx = bgCanvasEl.getContext('2d');
+        const now = performance.now();
+        const phaseSec = state.paused && bgPauseStart !== null
+          ? (bgPauseStart - bgModeT0) / 1000  // 暂停：冻结相位
+          : (now - bgModeT0) / 1000;          // 未运行：按当前时间相位补一帧
+        drawBgFrame(ctx, phaseSec);
+      }
     }
   }
-  window.addEventListener('resize', applyResponsiveLayout);
-  window.addEventListener('orientationchange', applyResponsiveLayout); // 平板横竖屏切换
+  // resize 用 rAF 节流：合并连续事件，下一帧统一应用最终尺寸（避免高频重复重绘）
+  let layoutRafId = null;
+  function scheduleResponsiveLayout() {
+    if (layoutRafId !== null) return;
+    layoutRafId = requestAnimationFrame(function () {
+      layoutRafId = null;
+      applyResponsiveLayout();
+    });
+  }
+  window.addEventListener('resize', scheduleResponsiveLayout);
+  window.addEventListener('orientationchange', scheduleResponsiveLayout); // 平板横竖屏切换同样合并
   applyResponsiveLayout(); // 启动时按当前视口重算一次
 
   if (new URLSearchParams(window.location.search).has('test')) {
