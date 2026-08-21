@@ -371,17 +371,17 @@ const SPEED_MIN_MS = 60;               // 速度上限（最快）
 const SPEED_STEP = 5;                  // 每吃 5 个食物升一档
 const SPEED_DELTA_MS = 20;             // 每升一档速度减少的毫秒数
 const FLICKER_LEVELS = [0.95, 1.4, 2.4]; // 慢/中/快 Hz
+const DIR_VECTORS = {                  // 方向 → 单位向量（模块级常量，避免每次调用重建）
+  up: { x: 0, y: -1 },
+  down: { x: 0, y: 1 },
+  left: { x: -1, y: 0 },
+  right: { x: 1, y: 0 }
+};
 
 /* ---------- 核心纯函数 ---------- */
-// 方向 → 单位向量
+// 方向 → 单位向量（未知方向返回零向量）
 function dirToVector(dir) {
-  const VECTORS = {
-    up: { x: 0, y: -1 },
-    down: { x: 0, y: 1 },
-    left: { x: -1, y: 0 },
-    right: { x: 1, y: 0 }
-  };
-  return VECTORS[dir] || { x: 0, y: 0 };
+  return DIR_VECTORS[dir] || { x: 0, y: 0 };
 }
 
 // 返回头部沿方向移动一格后的坐标
@@ -395,11 +395,15 @@ function isWallCollision(head) {
   return head.x < 0 || head.x >= GRID_SIZE || head.y < 0 || head.y >= GRID_SIZE;
 }
 
-// 撞自身判断（head 为移动后的新头，与蛇身任一段重叠即算）
-function isSelfCollision(head, snake) {
-  return snake.some(function (seg) {
-    return seg.x === head.x && seg.y === head.y;
-  });
+// 撞自身判断：head 为移动后的新头，与蛇身任一段重叠即算。
+// excludeTail=true 时忽略蛇尾——蛇不进食移动时尾段同时腾空，
+// 蛇头移入当前尾格是合法操作；调用方在“蛇不增长”的那次移动中应传 true。
+function isSelfCollision(head, snake, excludeTail) {
+  const end = excludeTail ? snake.length - 1 : snake.length;
+  for (let i = 0; i < end; i++) {
+    if (snake[i].x === head.x && snake[i].y === head.y) return true;
+  }
+  return false;
 }
 
 // 在非蛇身位置随机生成食物
@@ -465,11 +469,12 @@ function runSelfTests() {
   check('isWallCollision: 上越界', isWallCollision({ x: 5, y: -1 }), '实际 false');
   check('isWallCollision: 下越界', isWallCollision({ x: 5, y: GRID_SIZE }), '实际 false');
 
-  // ---- isSelfCollision：撞自身（含新头） ----
+  // ---- isSelfCollision：撞自身（含新头；excludeTail=true 时忽略蛇尾） ----
   const body = [{ x: 3, y: 3 }, { x: 3, y: 4 }, { x: 2, y: 4 }];
   check('isSelfCollision: 新头撞到身体', isSelfCollision({ x: 2, y: 4 }, body), '实际 false');
   check('isSelfCollision: 新头与旧头重叠', isSelfCollision({ x: 3, y: 3 }, body), '实际 false');
   check('isSelfCollision: 未撞自身', !isSelfCollision({ x: 4, y: 4 }, body), '实际 true');
+  check('isSelfCollision: 移入腾空尾格（excludeTail=true）不算碰撞', !isSelfCollision({ x: 2, y: 4 }, body, true), '实际 true');
 
   // ---- randomFoodCell：不在蛇身、且在网格内 ----
   {
@@ -493,6 +498,16 @@ function runSelfTests() {
     check('randomFoodCell: 200 次均不在蛇身且在网格内', foodOk, failDetail);
   }
 
+  // ---- randomFoodCell：满盘（蛇占满所有格子）----
+  {
+    const fullSnake = [];
+    for (let y = 0; y < GRID_SIZE; y++) {
+      for (let x = 0; x < GRID_SIZE; x++) fullSnake.push({ x: x, y: y });
+    }
+    const f = randomFoodCell(fullSnake);
+    check('randomFoodCell: 满盘时返回 null', f === null, '实际 ' + JSON.stringify(f));
+  }
+
   // ---- speedForLevel：单调不增且有下限 ----
   {
     let monotonic = true;
@@ -505,12 +520,17 @@ function runSelfTests() {
     check('speedForLevel: 不低于速度下限', aboveFloor, '低于 ' + SPEED_MIN_MS + 'ms');
     check('speedForLevel: 0 个食物时为起始速度', speedForLevel(0) === SPEED_START_MS, '实际 ' + speedForLevel(0));
     check('speedForLevel: 食物足够多时到达速度下限', speedForLevel(120) === SPEED_MIN_MS, '实际 ' + speedForLevel(120));
+    check('speedForLevel: 边界 4 个食物仍为起始速度', speedForLevel(4) === 180, '实际 ' + speedForLevel(4));
+    check('speedForLevel: 边界 5 个食物降一档', speedForLevel(5) === 160, '实际 ' + speedForLevel(5));
+    check('speedForLevel: 边界 30 个食物到达下限', speedForLevel(30) === 60, '实际 ' + speedForLevel(30));
   }
 
-  // ---- flickerHzForLevel：三档映射 ----
+  // ---- flickerHzForLevel：三档映射与越界回退 ----
   check('flickerHzForLevel: 0 → 0.95Hz', flickerHzForLevel(0) === 0.95, '实际 ' + flickerHzForLevel(0));
   check('flickerHzForLevel: 1 → 1.4Hz', flickerHzForLevel(1) === 1.4, '实际 ' + flickerHzForLevel(1));
   check('flickerHzForLevel: 2 → 2.4Hz', flickerHzForLevel(2) === 2.4, '实际 ' + flickerHzForLevel(2));
+  check('flickerHzForLevel: 越界 -1 回退到最快档', flickerHzForLevel(-1) === 2.4, '实际 ' + flickerHzForLevel(-1));
+  check('flickerHzForLevel: 越界 3 回退到最快档', flickerHzForLevel(3) === 2.4, '实际 ' + flickerHzForLevel(3));
 
   return results;
 }
@@ -550,7 +570,7 @@ function renderSelfTestBanner(results) {
 /* ---------- 浏览器端初始化（Node 下自动跳过） ---------- */
 if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   // 后续任务在此接入游戏循环、输入、背景、设置、音效与界面流程
-  if (window.location && window.location.search && window.location.search.indexOf('test=1') !== -1) {
+  if (new URLSearchParams(window.location.search).has('test')) {
     const selfTestResults = runSelfTests();
     logSelfTestResults(selfTestResults);
     renderSelfTestBanner(selfTestResults);
