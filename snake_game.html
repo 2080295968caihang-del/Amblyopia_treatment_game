@@ -565,6 +565,67 @@ function saveSettings(s) {
 // 设置对象：启动时从 localStorage 加载，家长设置面板修改后即时生效并持久化
 let settings = loadSettings();
 
+/* ---------- Web Audio 合成音效（Task 6） ---------- */
+// 播放开关判定：只有 settings.soundOn === true 才出声（纯函数，供自测与调用方复用）
+function shouldPlaySound(settingsObj) {
+  return !!settingsObj && settingsObj.soundOn === true;
+}
+
+// 懒创建的共享 AudioContext（浏览器自动播放策略：首次用户交互时创建/恢复）
+let audioCtx = null;
+
+// 获取/创建并恢复 AudioContext；无头环境（Node / 不支持 Web Audio）返回 null，静默跳过
+function ensureAudioContext() {
+  if (typeof window === 'undefined') return null;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (typeof AC === 'undefined') return null;
+  try {
+    if (!audioCtx) audioCtx = new AC();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    return audioCtx;
+  } catch (e) {
+    return null; // 音频设备不可用等异常：静默忽略，不影响游戏
+  }
+}
+
+// 通用单音合成：freq 起始频率(Hz)、duration 时长(s)、type 波形、volume 音量(0-1)；
+// endFreq 可选：大于 0 时频率在 duration 内平滑下滑到 endFreq。
+function playTone(freq, duration, type, volume, endFreq) {
+  if (!shouldPlaySound(settings)) return;
+  const ctx = ensureAudioContext();
+  if (!ctx) return;
+  try {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    const t0 = ctx.currentTime;
+    // 简单音量包络：快速起音 + 指数衰减，避免爆音
+    gain.gain.setValueAtTime(0.0001, t0);
+    gain.gain.exponentialRampToValueAtTime(volume, t0 + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + duration);
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, t0);
+    if (typeof endFreq === 'number' && endFreq > 0 && endFreq !== freq) {
+      osc.frequency.exponentialRampToValueAtTime(endFreq, t0 + duration);
+    }
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(t0);
+    osc.stop(t0 + duration + 0.02);
+  } catch (e) {
+    // 静默忽略：任何音频异常都不影响游戏逻辑
+  }
+}
+
+// 吃到食物：短促高音"叮"（880Hz 方波，0.08s）
+function eatSound() {
+  playTone(880, 0.08, 'square', 0.25);
+}
+
+// 游戏结束：低音下滑提示（220Hz 滑到 110Hz，0.5s 三角波）
+function overSound() {
+  playTone(220, 0.5, 'triangle', 0.3, 110);
+}
+
 // [min, max] 区间随机数
 function randRange(min, max) {
   return min + Math.random() * (max - min);
@@ -1540,6 +1601,16 @@ function runSelfTests() {
     return true;
   })(), '出现重复或越界');
 
+  // ---- Web Audio 合成音效：播放开关判定与无头守卫（Task 6）----
+  check('shouldPlaySound: soundOn=true → true', shouldPlaySound({ soundOn: true }) === true, '应为 true');
+  check('shouldPlaySound: soundOn=false → false', shouldPlaySound({ soundOn: false }) === false, '应为 false');
+  check('shouldPlaySound: 缺失/空对象 → false', (function () {
+    return shouldPlaySound({}) === false && shouldPlaySound(null) === false && shouldPlaySound(undefined) === false;
+  })(), '非 soundOn=true 不应播放');
+  check('eatSound/overSound: Node 无头环境静默返回', (function () {
+    try { eatSound(); overSound(); return true; } catch (e) { return false; }
+  })(), '调用抛出异常');
+
   return results;
 }
 
@@ -1852,11 +1923,11 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     const result = stepGame(state);
     state = result.state;
     if (result.ate) {
-      // TODO(Task6): 播放音效（吃到食物）
+      eatSound(); // 吃到食物：短促高音"叮"
       updateHud();
     }
     if (result.gameOver) {
-      // TODO(Task6): 播放音效（游戏结束）
+      overSound(); // 游戏结束：低音下滑提示
       gameOver();
     }
   }
@@ -1905,6 +1976,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
 
   // 开始 / 再玩一次：重置状态并启动主循环
   function startGame() {
+    ensureAudioContext(); // 首次用户交互：创建/恢复 AudioContext（浏览器自动播放策略）
     state = createInitialState();
     state.food = randomFoodCell(state.snake);
     state.running = true;
@@ -1985,15 +2057,33 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     });
   }
 
-  // 音效开关：只持久化，不影响背景渲染
+  // 音效开关：只持久化，不影响背景渲染；与 HUD 静音按钮共用同一 settings.soundOn
   const soundOnEl = document.getElementById('soundOn');
+  const btnMute = document.getElementById('btnMute');
+  // 同步 HUD 静音按钮文案（🔊 音效开 / 🔇 音效关）
+  function updateMuteButton() {
+    if (!btnMute) return;
+    btnMute.textContent = settings.soundOn ? '🔊 音效开' : '🔇 音效关';
+  }
   if (soundOnEl) {
     soundOnEl.checked = !!settings.soundOn;
     soundOnEl.addEventListener('change', function () {
       settings.soundOn = soundOnEl.checked;
       saveSettings(settings);
+      updateMuteButton(); // HUD 静音按钮同步
     });
   }
+  if (btnMute) {
+    // HUD 静音按钮：切换音效开关并持久化，与设置抽屉开关保持同步
+    btnMute.addEventListener('click', function () {
+      settings.soundOn = !settings.soundOn;
+      saveSettings(settings);
+      updateMuteButton();
+      if (soundOnEl) soundOnEl.checked = settings.soundOn; // 设置抽屉开关同步
+      ensureAudioContext(); // 点击也是用户交互：解锁音频（开启音效时可立即播放）
+    });
+  }
+  updateMuteButton(); // 初始按当前设置回填按钮文案
   // 背景变化三开关（id 与 settings 键同名）：回填 + 变更即生效并持久化
   const bgCheckboxKeys = ['colorChange', 'shapeChange', 'flickerChange'];
   for (let i = 0; i < bgCheckboxKeys.length; i++) {
