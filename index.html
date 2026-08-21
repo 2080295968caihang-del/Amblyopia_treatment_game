@@ -12,6 +12,8 @@
 
 <!-- ============ 游戏挑选菜单页 ============ -->
 <div id="menuScreen" class="screen">
+  <canvas id="menuBgCanvas" aria-hidden="true"></canvas>
+  <div class="menu-bg-dim" aria-hidden="true"></div>
   <header class="menu-header">
     <h1 class="menu-title">弱视治疗训练</h1>
     <button id="btnOpenSettings" class="icon-btn" title="家长设置" aria-label="家长设置">⚙</button>
@@ -146,7 +148,97 @@
 <script src="js/bg-engine.js"></script>
 <script src="js/snake.js"></script>
 <script>
-  console.log('app init');
+(function () {
+  'use strict';
+  /* 设置由 js/snake.js 负责加载与持久化，这里取用其引用，保证两端同步 */
+  var settings = (window.SnakeGame && window.SnakeGame.getSettings) ? window.SnakeGame.getSettings() : null;
+
+  var App = {
+    settings: settings,
+    // 简单路由：menu ↔ game-snake（显隐类切换）
+    showScreen: function (name) {
+      if (typeof document === 'undefined') return;
+      var menu = document.getElementById('menuScreen');
+      var game = document.getElementById('gameScreen');
+      if (menu) menu.classList.toggle('hidden', name !== 'menu');
+      if (game) game.classList.toggle('hidden', name !== 'game-snake');
+    },
+    // 由 SnakeGame.backToMenu 调用：回到游戏挑选菜单页
+    backFromGame: function () {
+      App.showScreen('menu');
+      setupMenuBg();
+    }
+  };
+  window.App = App;
+
+  /* ---------- 菜单页背景预览：用同一 BgEngine 引擎轮换刺激模式 ---------- */
+  var menuBgEngine = null;
+  function setupMenuBg() {
+    if (typeof document === 'undefined') return;
+    var canvas = document.getElementById('menuBgCanvas');
+    if (!canvas || !window.BgEngine) return;
+    var dpr = window.devicePixelRatio || 1;
+    var w = Math.max(1, Math.round(window.innerWidth * dpr));
+    var h = Math.max(1, Math.round(window.innerHeight * dpr));
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+    }
+    if (!menuBgEngine) menuBgEngine = window.BgEngine.create(canvas, settings);
+    else menuBgEngine.applySettings(settings);
+    menuBgEngine.start();
+  }
+  function stopMenuBg() {
+    if (menuBgEngine) menuBgEngine.stop();
+  }
+
+  if (typeof document !== 'undefined') {
+    // 开始贪吃蛇：停掉菜单预览，切到游戏屏并启动游戏
+    var btnStartSnake = document.getElementById('btnStartSnake');
+    if (btnStartSnake) {
+      btnStartSnake.addEventListener('click', function () {
+        stopMenuBg();
+        App.showScreen('game-snake');
+        if (window.SnakeGame && window.SnakeGame.start) window.SnakeGame.start(settings);
+      });
+    }
+    // 家长设置抽屉（菜单页与游戏内共用）：由 snake.js 一次性绑定
+    if (window.SnakeGame && window.SnakeGame.bindSettingsUI) window.SnakeGame.bindSettingsUI();
+
+    // 菜单屏尺寸变化时重建预览画布分辨率
+    window.addEventListener('resize', function () {
+      var menu = document.getElementById('menuScreen');
+      if (menu && !menu.classList.contains('hidden')) setupMenuBg();
+    });
+
+    setupMenuBg(); // 启动时开启菜单页背景预览
+  }
+
+  /* ---------- ?test=1 自测入口（无 DOM 环境也暴露 __snakeTests） ---------- */
+  if (window.location && window.location.search && String(window.location.search).indexOf('test') !== -1) {
+    function collectTests() {
+      var t = [];
+      if (window.SnakeGame && window.SnakeGame.runSelfTests) t = t.concat(window.SnakeGame.runSelfTests());
+      if (window.BgEngine && window.BgEngine.runSelfTests) t = t.concat(window.BgEngine.runSelfTests());
+      return t;
+    }
+    window.__snakeTests = { runSelfTests: collectTests };
+    if (typeof document !== 'undefined') {
+      var all = collectTests();
+      var pass = 0, fail = 0;
+      for (var i = 0; i < all.length; i++) {
+        if (all[i].pass) pass++;
+        else { fail++; if (window.console) console.log('FAIL ' + all[i].name); }
+      }
+      var banner = document.getElementById('testBanner');
+      if (banner) {
+        banner.textContent = 'SELF-TEST PASS (' + pass + ')/FAIL (' + fail + ')';
+        banner.classList.remove('hidden');
+        banner.classList.add(fail === 0 ? 'test-pass' : 'test-fail');
+      }
+    }
+  }
+})();
 </script>
 </body>
 </html>
