@@ -132,8 +132,6 @@ html, body {
   justify-content: space-between;
   gap: 10px;
   flex-wrap: wrap;
-  padding-left: env(safe-area-inset-left);
-  padding-right: env(safe-area-inset-right);
   font-size: clamp(16px, 2.6vmin, 24px);
   font-weight: bold;
 }
@@ -149,8 +147,6 @@ html, body {
   aspect-ratio: 1 / 1;
   background: #000000;
   border: 3px solid var(--color-accent);
-  margin-left: env(safe-area-inset-left);
-  margin-right: env(safe-area-inset-right);
   touch-action: none; /* 触控预留：避免触摸滚动干扰后续触控操控 */
 }
 #bgCanvas,
@@ -2268,9 +2264,10 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
       gameCanvasEl.height = canvasPx;
       sizeChanged = true;
     }
-    // 重设 canvas 尺寸会清空位图：运行中由主循环/背景循环下一帧补画；
-    // 暂停或未运行时循环不会渲染，需立即补画（暂停用冻结相位，避免恢复后相位跳变）。
-    if (sizeChanged && (!state.running || state.paused)) {
+    // 重设 canvas 尺寸会清空位图，必须立即同步补画：
+    // 布局回调注册晚于主/背景循环，运行中同帧先渲染后清空，拖拽窗口会持续黑屏。
+    // 运行中/未运行时按当前时间相位，暂停沿用冻结相位，避免恢复后相位跳变。
+    if (sizeChanged) {
       renderGame();
       if (bgCanvasEl) {
         ensureBgGeom();
@@ -2278,7 +2275,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
         const now = performance.now();
         const phaseSec = state.paused && bgPauseStart !== null
           ? (bgPauseStart - bgModeT0) / 1000  // 暂停：冻结相位
-          : (now - bgModeT0) / 1000;          // 未运行：按当前时间相位补一帧
+          : (now - bgModeT0) / 1000;          // 运行/未运行：按当前时间相位补一帧
         drawBgFrame(ctx, phaseSec);
       }
     }
