@@ -2243,7 +2243,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   function handleTouchEnd(e) { /* 平板 WebView 接入点：预留 */ }
 
   // ---- 自适应缩放（Task 7 + 审查加固）：棋盘按 min(视口宽, 高-预留) 等比缩放并封顶 ----
-  // #gameCanvas 与 #bgCanvas 同步内部分辨率：× devicePixelRatio 后向下取整到 GRID_SIZE
+  // #gameCanvas 与 #bgCanvas 同步内部分辨率：× devicePixelRatio 后取整到 GRID_SIZE
   // 整数倍（每格整数设备像素，清晰度最佳）；显示尺寸由 .board-wrap 宽度控制（CSS 像素）。
   function applyResponsiveLayout() {
     const wrap = document.querySelector('.board-wrap');
