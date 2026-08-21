@@ -434,6 +434,78 @@ function flickerHzForLevel(level) {
   return FLICKER_LEVELS[level];
 }
 
+/* ---------- 游戏状态与核心逻辑（纯函数，Node 可测） ---------- */
+
+// 创建一局游戏的初始状态（纯数据）
+function createInitialState() {
+  return {
+    snake: [{ x: 10, y: 10 }, { x: 9, y: 10 }, { x: 8, y: 10 }],
+    dir: 'right',
+    nextDir: 'right',
+    food: null,
+    score: 0,
+    foodsEaten: 0,
+    running: false,
+    paused: false,
+    gameOver: false
+  };
+}
+
+// 判断两个方向是否互为 180° 反向
+function isOppositeDir(a, b) {
+  const va = dirToVector(a);
+  const vb = dirToVector(b);
+  return va.x + vb.x === 0 && va.y + vb.y === 0;
+}
+
+// 是否允许把方向改为 newDir（禁止 180° 反向；同方向/垂直方向允许）
+function canSetDirection(currentDir, newDir) {
+  return !isOppositeDir(currentDir, newDir);
+}
+
+// 输入层：把新方向写入 state.nextDir，反向时拒绝并返回 false（Task 3 接键盘/触控）
+function setDirection(state, dir) {
+  if (!canSetDirection(state.dir, dir)) return false;
+  state.nextDir = dir;
+  return true;
+}
+
+// 走一步的核心纯逻辑：不修改传入 state，返回 { state, ate, gameOver }
+// opts.foodCell 可选：指定吃食物后新食物的位置（默认随机生成，供测试确定性使用）
+function stepGame(state, opts) {
+  const opt = opts || {};
+  // 生效方向：nextDir 与当前 dir 反向时回退到 dir（禁止 180° 反向的防御）
+  const queued = state.nextDir || state.dir;
+  const dir = isOppositeDir(queued, state.dir) ? state.dir : queued;
+  const newHead = nextHead(state.snake[0], dir);
+  // 是否吃到食物
+  const ate = !!state.food && state.food.x === newHead.x && state.food.y === newHead.y;
+  // 碰撞判定：不进食的 tick 尾段腾空（excludeTail=true）；进食的 tick 不腾尾（全段判定）
+  const hitWall = isWallCollision(newHead);
+  const hitSelf = isSelfCollision(newHead, state.snake, ate ? undefined : true);
+  // 组装新蛇：进食不弹尾（蛇长 +1），未进食弹尾
+  const newSnake = [newHead].concat(state.snake);
+  if (!ate) newSnake.pop();
+  // 进食后重新生成食物
+  let newFood = state.food;
+  if (ate) newFood = opt.foodCell || randomFoodCell(newSnake);
+  return {
+    state: {
+      snake: newSnake,
+      dir: dir,
+      nextDir: dir,
+      food: newFood,
+      score: ate ? state.score + 10 : state.score,
+      foodsEaten: ate ? state.foodsEaten + 1 : state.foodsEaten,
+      running: state.running,
+      paused: state.paused,
+      gameOver: hitWall || hitSelf
+    },
+    ate: ate,
+    gameOver: hitWall || hitSelf
+  };
+}
+
 /* ---------- 自测框架 ---------- */
 // 运行全部自测，返回 [{pass, name, detail?}]，纯逻辑、无 DOM 依赖
 function runSelfTests() {
@@ -532,6 +604,102 @@ function runSelfTests() {
   check('flickerHzForLevel: 越界 -1 回退到最快档', flickerHzForLevel(-1) === 2.4, '实际 ' + flickerHzForLevel(-1));
   check('flickerHzForLevel: 越界 3 回退到最快档', flickerHzForLevel(3) === 2.4, '实际 ' + flickerHzForLevel(3));
 
+  // ---- 方向：禁止 180° 反向（向左时按右不生效） ----
+  check('禁止反向: isOppositeDir(left, right) 为 true', isOppositeDir('left', 'right') === true, '实际 false');
+  check('禁止反向: isOppositeDir(right, up) 为 false', isOppositeDir('right', 'up') === false, '实际 true');
+  check('禁止反向: 向左时按右不生效（setDirection 拒绝）', (function () {
+    const s = createInitialState();
+    s.dir = 'left'; s.nextDir = 'left'; // 初始向左
+    const ok = setDirection(s, 'right');
+    return ok === false && s.nextDir === 'left';
+  })(), '实际未拒绝或方向被改写');
+  check('禁止反向: 同方向允许', (function () {
+    const s = createInitialState();
+    s.dir = 'left'; s.nextDir = 'left';
+    return setDirection(s, 'left') === true && s.nextDir === 'left';
+  })(), '实际被拒绝');
+  check('禁止反向: 垂直转向允许', (function () {
+    const s = createInitialState();
+    return setDirection(s, 'up') === true && s.nextDir === 'up';
+  })(), '实际被拒绝');
+  check('禁止反向: stepGame 防御直接置入的反向 nextDir', (function () {
+    const s = createInitialState();
+    s.food = { x: 20, y: 20 };
+    s.nextDir = 'left'; // 绕过 setDirection 直接注入反向
+    const r = stepGame(s);
+    return !r.gameOver && samePoint(r.state.snake[0], { x: 11, y: 10 });
+  })(), '实际按反向移动');
+
+  // ---- stepGame：正常移动（不进食，尾段腾空） ----
+  {
+    const s = createInitialState();
+    s.food = { x: 20, y: 20 };
+    const r = stepGame(s);
+    check('stepGame: 未进食时蛇长不变', r.state.snake.length === 3 && !r.ate && !r.gameOver, '实际长度 ' + r.state.snake.length + ' ate=' + r.ate + ' over=' + r.gameOver);
+    check('stepGame: 未进食时头部右移一格', samePoint(r.state.snake[0], { x: 11, y: 10 }), '实际 ' + JSON.stringify(r.state.snake[0]));
+    check('stepGame: 尾部腾空移入合法', (function () {
+      const s2 = createInitialState();
+      s2.snake = [{ x: 5, y: 5 }, { x: 5, y: 6 }];
+      s2.dir = 'down'; s2.nextDir = 'down';
+      s2.food = { x: 0, y: 0 };
+      const r2 = stepGame(s2);
+      return !r2.gameOver && r2.state.snake.length === 2 && samePoint(r2.state.snake[0], { x: 5, y: 6 });
+    })(), '移入尾格被误判为碰撞');
+  }
+
+  // ---- stepGame：吃食物 ----
+  {
+    const s = createInitialState();
+    s.food = { x: 11, y: 10 }; // 下一步即食物
+    const r = stepGame(s);
+    check('stepGame: 吃食物后蛇长 +1', r.ate === true && r.state.snake.length === 4, '实际 ate=' + r.ate + ' 长度 ' + r.state.snake.length);
+    check('stepGame: 吃食物后分数 +10', r.state.score === 10, '实际 ' + r.state.score);
+    check('stepGame: 吃食物后 foodsEaten +1', r.state.foodsEaten === 1, '实际 ' + r.state.foodsEaten);
+    check('stepGame: 吃食物后新食物不在蛇身', (function () {
+      const f = r.state.food;
+      return !!f && !r.state.snake.some(function (seg) { return seg.x === f.x && seg.y === f.y; });
+    })(), '实际 ' + JSON.stringify(r.state.food));
+    check('stepGame: foodCell 可指定新食物位置', (function () {
+      const s = createInitialState();
+      s.food = { x: 11, y: 10 }; // 先让本步能吃到食物
+      const r2 = stepGame(s, { foodCell: { x: 0, y: 0 } });
+      return samePoint(r2.state.food, { x: 0, y: 0 });
+    })(), '实际 ' + JSON.stringify(stepGame(createInitialState(), { foodCell: { x: 0, y: 0 } }).state.food));
+  }
+
+  // ---- stepGame：撞墙 / 撞身触发 gameOver ----
+  {
+    const s = createInitialState();
+    s.snake = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 2, y: 0 }];
+    s.dir = 'left'; s.nextDir = 'left';
+    s.food = { x: 20, y: 20 };
+    const r = stepGame(s);
+    check('stepGame: 撞墙触发 gameOver', r.gameOver === true && r.state.gameOver === true, '实际 ' + r.gameOver);
+  }
+  {
+    const s = createInitialState();
+    s.snake = [{ x: 5, y: 5 }, { x: 6, y: 5 }, { x: 6, y: 6 }, { x: 5, y: 6 }, { x: 4, y: 6 }, { x: 4, y: 5 }];
+    s.dir = 'down'; s.nextDir = 'down';
+    s.food = { x: 0, y: 0 };
+    const r = stepGame(s);
+    check('stepGame: 撞身触发 gameOver', r.gameOver === true, '实际 ' + r.gameOver);
+  }
+  {
+    const s = createInitialState();
+    s.snake = [{ x: 5, y: 5 }, { x: 5, y: 6 }];
+    s.dir = 'down'; s.nextDir = 'down';
+    s.food = { x: 5, y: 6 }; // 尾格上有食物：进食 → 不腾尾 → 撞身
+    const r = stepGame(s);
+    check('stepGame: 进食 tick 移入未腾空尾格算撞身', r.ate === true && r.gameOver === true, '实际 ate=' + r.ate + ' over=' + r.gameOver);
+  }
+  check('stepGame: 不改动传入 state（纯净）', (function () {
+    const s = createInitialState();
+    s.food = { x: 20, y: 20 };
+    const before = JSON.stringify(s);
+    stepGame(s);
+    return JSON.stringify(s) === before;
+  })(), '实际被修改');
+
   return results;
 }
 
@@ -569,7 +737,143 @@ function renderSelfTestBanner(results) {
 
 /* ---------- 浏览器端初始化（Node 下自动跳过） ---------- */
 if (typeof window !== 'undefined' && typeof document !== 'undefined') {
-  // 后续任务在此接入游戏循环、输入、背景、设置、音效与界面流程
+  /* ---------- 浏览器端实现（Node 下自动跳过） ---------- */
+
+  const HIGH_SCORE_KEY = 'amblyopia_snake_highscore_v1';
+  let state = createInitialState();   // 当前一局的状态
+  let animationId = null;             // rAF 句柄
+  let lastFrameTs = null;             // 上一帧时间戳（用于时间累积）
+  let accMs = 0;                      // 距下一次移动累积的毫秒数
+
+  // 读取最高分（localStorage 缺失或非法时返回 0）
+  function readHighScore() {
+    const raw = (typeof localStorage !== 'undefined') ? localStorage.getItem(HIGH_SCORE_KEY) : null;
+    const n = parseInt(raw, 10);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  }
+
+  // 写入最高分
+  function writeHighScore(score) {
+    if (typeof localStorage !== 'undefined') localStorage.setItem(HIGH_SCORE_KEY, String(score));
+  }
+
+  // 同步最高分：超过历史最高分时立即持久化，返回当前最高分
+  function syncHighScore() {
+    const high = readHighScore();
+    if (state.score > high) {
+      writeHighScore(state.score);
+      return state.score;
+    }
+    return high;
+  }
+
+  // 刷新 HUD：分数 / 最高分 / 速度档
+  function updateHud() {
+    document.getElementById('hudScore').textContent = String(state.score);
+    document.getElementById('hudHighScore').textContent = String(syncHighScore());
+    document.getElementById('hudSpeed').textContent = String(1 + Math.floor(state.foodsEaten / SPEED_STEP));
+  }
+
+  // 在 #gameCanvas 上绘制蛇与食物（网格按 canvas 尺寸均分）
+  function renderGame() {
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const cell = canvas.width / GRID_SIZE;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    // 蛇身（高对比黄）
+    ctx.fillStyle = '#ffd400';
+    for (let i = 1; i < state.snake.length; i++) {
+      const seg = state.snake[i];
+      ctx.fillRect(seg.x * cell, seg.y * cell, cell, cell);
+    }
+    // 蛇头（白色高亮）
+    const head = state.snake[0];
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(head.x * cell, head.y * cell, cell, cell);
+    // 食物（高对比红）
+    if (state.food) {
+      ctx.fillStyle = '#ff2d2d';
+      ctx.fillRect(state.food.x * cell, state.food.y * cell, cell, cell);
+    }
+  }
+
+  // 每 tick 走一步：应用 stepGame 结果、更新 HUD、必要时触发结束
+  function tick() {
+    const result = stepGame(state);
+    state = result.state;
+    if (result.ate) {
+      // TODO(Task6): 播放音效（吃到食物）
+      updateHud();
+    }
+    if (result.gameOver) {
+      // TODO(Task6): 播放音效（游戏结束）
+      gameOver();
+      return;
+    }
+    renderGame();
+  }
+
+  // 主循环：requestAnimationFrame + 时间累积，达到 speedForLevel(foodsEaten) 毫秒走一格
+  function loop(timestamp) {
+    if (state.gameOver) {
+      animationId = null;
+      return;
+    }
+    if (state.running && !state.paused) {
+      const dt = lastFrameTs === null ? 0 : Math.min(timestamp - lastFrameTs, 250);
+      lastFrameTs = timestamp;
+      accMs += dt;
+      const interval = speedForLevel(state.foodsEaten);
+      let steps = 0;
+      // 帧间隔抖动时一次最多补 3 格，避免长时间卡顿后瞬间连跳
+      while (accMs >= interval && steps < 3 && state.running && !state.paused && !state.gameOver) {
+        accMs -= interval;
+        steps++;
+        tick();
+      }
+    } else {
+      // 暂停/未运行时清零累积，避免恢复瞬间跳格
+      accMs = 0;
+      lastFrameTs = null;
+    }
+    animationId = requestAnimationFrame(loop);
+  }
+
+  // 游戏结束：停止主循环、更新最高分、显示结束浮层
+  function gameOver() {
+    state.running = false;
+    state.gameOver = true;
+    syncHighScore();
+    document.getElementById('endScore').textContent = String(state.score);
+    document.getElementById('endHighScore').textContent = String(readHighScore());
+    document.getElementById('endOverlay').classList.remove('hidden');
+  }
+
+  // 开始 / 再玩一次：重置状态并启动主循环
+  function startGame() {
+    state = createInitialState();
+    state.food = randomFoodCell(state.snake);
+    state.running = true;
+    document.getElementById('startScreen').classList.add('hidden');
+    document.getElementById('gameScreen').classList.remove('hidden');
+    document.getElementById('endOverlay').classList.add('hidden');
+    accMs = 0;
+    lastFrameTs = null;
+    updateHud();
+    renderGame();
+    cancelAnimationFrame(animationId);
+    animationId = requestAnimationFrame(loop);
+  }
+
+  // 开始屏最高分展示
+  const startHigh = document.getElementById('startHighScore');
+  if (startHigh) startHigh.textContent = String(readHighScore());
+  // 开始按钮（键盘/触控输入为 Task 3）
+  const btnStart = document.getElementById('btnStart');
+  if (btnStart) btnStart.addEventListener('click', startGame);
+  // 结束浮层“再玩一次”
+  const btnRestart = document.getElementById('btnRestart');
+  if (btnRestart) btnRestart.addEventListener('click', startGame);
   if (new URLSearchParams(window.location.search).has('test')) {
     const selfTestResults = runSelfTests();
     logSelfTestResults(selfTestResults);
