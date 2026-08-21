@@ -8,7 +8,7 @@
 
   /* ---------- 常量 ---------- */
   var GRID_UNUSED = 21; // 背景引擎不再依赖网格，仅为兼容保留
-  var MODE_IDS = ['red_flicker', 'cam_grating', 'checkerboard', 'stripes']; // 4 种，已删 dots/fun_shapes
+  var MODE_IDS = ['red_flicker', 'cam_grating', 'checkerboard', 'stripes']; // 4 种，已删圆点/童趣图案
   var FLICKER_LEVELS = [1.2, 2, 3.2];      // 慢/中/快 Hz（v2.0 加快）
   var BG_FLICKER_JITTER = 0.2;             // 闪烁频率 ±20% 抖动
   var BG_ROTATE_MS = 15000;                // 形状 15s 切换

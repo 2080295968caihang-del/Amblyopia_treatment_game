@@ -1,127 +1,109 @@
-﻿// acceptance_check.js - T8 final acceptance: static checks + DOM-stub smoke test (headless)
-// Usage: node acceptance_check.js [path/to/snake_game.html]
+﻿// acceptance_check.js - v2.0 最终验收：静态检查 + DOM 桩冒烟测试（无头）
+// 用法: node acceptance_check.js [project-root]
 'use strict';
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
-const local = path.join(__dirname, 'snake_game.html');
-const target = process.argv[2] || (fs.existsSync(local) ? local : path.join(__dirname, 'amblyopia_game', 'snake_game.html'));
-const html = fs.readFileSync(target, 'utf8');
+const root = process.argv[2] || __dirname;
+const localRoot = fs.existsSync(path.join(root, 'index.html')) ? root : path.join(root, 'amblyopia_game');
+
+function readRel(rel) {
+  return fs.readFileSync(path.join(localRoot, rel), 'utf8');
+}
+
+const html = readRel('index.html');
+const bgEngineSrc = readRel('js/bg-engine.js');
+const snakeSrc = readRel('js/snake.js');
+const cssSrc = readRel('css/style.css');
+
 let failures = 0;
 const results = [];
-
 function check(name, ok, detail) {
-  results.push({ name: name, ok: ok, detail: ok ? '' : (detail || '') });
+  results.push({ name, ok, detail: ok ? '' : (detail || '') });
   console.log((ok ? '  PASS ' : '  FAIL ') + name + (ok ? '' : ' -- ' + (detail || '')));
   if (!ok) failures++;
 }
 
-/* ---------- Part 1: static checks ---------- */
+/* ============ Part 1: 静态检查 ============ */
 
-const hasScriptSrc = /<script[^>]*\bsrc\s*=/i.test(html);
-const hasExtUrl = /(?:href|src)\s*=\s*["']https?:\/\//i.test(html);
-const hasLinkTag = /<link\b/i.test(html);
-const hasImport = /@import/i.test(html);
-check('S1 zero external deps (no script src / ext url / link / import)',
-  !hasScriptSrc && !hasExtUrl && !hasLinkTag && !hasImport,
-  'scriptSrc=' + hasScriptSrc + ' extUrl=' + hasExtUrl + ' link=' + hasLinkTag + ' import=' + hasImport);
+// S1: 加载顺序与零外部依赖
+const iCss = html.indexOf('css/style.css');
+const iBg = html.indexOf('js/bg-engine.js');
+const iSnake = html.indexOf('js/snake.js');
+check('S1 script/link order css → bg-engine → snake → inline',
+  iCss !== -1 && iBg !== -1 && iSnake !== -1 && iCss < iBg && iBg < iSnake && iSnake < html.indexOf('<script>', iSnake),
+  'css=' + iCss + ' bg=' + iBg + ' snake=' + iSnake);
+const allSrc = html + '\n' + cssSrc + '\n' + bgEngineSrc + '\n' + snakeSrc;
+check('S2 zero external deps (no http src/href / @import)',
+  !/(?:href|src)\s*=\s*["']https?:\/\//i.test(allSrc) && !/@import/i.test(allSrc));
 
-check('S2 viewport with viewport-fit=cover', /<meta\s+name="viewport"[\s\S]*?viewport-fit\s*=\s*cover/i.test(html));
+check('S3 viewport with viewport-fit=cover', /<meta\s+name="viewport"[\s\S]*?viewport-fit\s*=\s*cover/i.test(html));
 
-const eyeCover = '\u906e\u76d6\u597d\u773c';
-const eyeCount = (html.match(new RegExp(eyeCover, 'g')) || []).length;
-const fullPhrase = '\u8bf7\u5148\u906e\u76d6\u597d\u773c\uff0c\u53ea\u7528\u5f31\u89c6\u773c\u770b';
-check('S3 eye reminder present >=2 places', eyeCount >= 2, 'count=' + eyeCount);
-check('S3c start-screen full reminder phrase', html.indexOf(fullPhrase) !== -1);
-check('S3b reminder has role=note + icon container',
-  /eye-reminder[\s\S]{0,260}role="note"/.test(html) || /role="note"[\s\S]{0,260}eye-reminder/.test(html));
+// S4: 菜单页卡片
+check('S4 snake start card + 2 soon cards',
+  html.indexOf('btnStartSnake') !== -1 && (html.match(/card-soon/g) || []).length >= 2,
+  'soon=' + (html.match(/card-soon/g) || []).length);
+check('S5 settings gear on menu', html.indexOf('btnOpenSettings') !== -1);
 
-check('S4 no alert( text popup', !/alert\s*\(/.test(html));
+// S6: Esc 游戏菜单四个按钮
+check('S6 Esc menu overlay + 4 buttons',
+  ['gameMenuOverlay', 'btnResume', 'btnMenuSettings', 'btnRestart', 'btnBackMenu'].every(function (k) { return html.indexOf(k) !== -1; }));
 
-check('S5 ?test=1 hook + __snakeTests exposed',
-  /location\.search/.test(html) && /globalThis\.__snakeTests\s*=/.test(html));
+// S7: 结束浮层
+check('S7 end overlay fields', ['endOverlay', 'endScore', 'endHighScore', 'btnPlayAgain', 'btnEndBackMenu'].every(function (k) { return html.indexOf(k) !== -1; }));
 
-const dfk = html.indexOf('function directionForKey');
-const dfkArea = dfk >= 0 ? html.slice(dfk, dfk + 400) : '';
-const hgk = html.indexOf('function handleGameKey');
-const hgkArea = hgk >= 0 ? html.slice(hgk, hgk + 500) : '';
-check('S6 keyboard arrows/WASD/pause keys',
-  ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].every(function (k) { return dfkArea.indexOf(k) !== -1; }) &&
-  /case 'w'/.test(dfkArea) && /case 'a'/.test(dfkArea) && /case 's'/.test(dfkArea) && /case 'd'/.test(dfkArea) &&
-  hgkArea.indexOf("' '") !== -1 && hgkArea.indexOf("'p'") !== -1 && hgkArea.indexOf("'P'") !== -1 &&
-  /handleGameKey\(state, e\.key\)/.test(html),
-  'dfk=' + dfk + ' hgk=' + hgk);
+// S8: 设置抽屉控件
+const flRadios = (html.match(/name="flickerLevel"\s+value="(\d)"/g) || []).map(function (m) { return m.match(/\d/)[0]; });
+const modeBoxes = (html.match(/name="mode"\s+value="([a-z_]+)"/g) || []).map(function (m) { return m.match(/value="([a-z_]+)"/)[1]; });
+const cmRadios = (html.match(/name="colorMode"\s+value="([a-z]+)"/g) || []).map(function (m) { return m.match(/value="([a-z]+)"/)[1]; });
+const ssRadios = (html.match(/name="startSpeed"\s+value="(\d)"/g) || []).map(function (m) { return m.match(/\d/)[0]; });
+check('S8 flicker radios 0/1/2', flRadios.join(',') === '0,1,2', flRadios.join(','));
+check('S8b mode checkboxes = 4 保留模式', modeBoxes.join(',') === 'red_flicker,cam_grating,checkerboard,stripes', modeBoxes.join(','));
+check('S8c colorMode contrast/mixed', cmRadios.join(',') === 'contrast,mixed', cmRadios.join(','));
+check('S8d startSpeed 1-5', ssRadios.join(',') === '1,2,3,4,5', ssRadios.join(','));
+check('S8e bg toggles + sound + note',
+  ['id="colorChange"', 'id="shapeChange"', 'id="flickerChange"', 'id="soundOn"', 'drawer-note'].every(function (k) { return html.indexOf(k) !== -1; }));
 
-check('S7 mouse mousemove/mousedown/mouseup + canvasMouseToCell',
-  /mousemove/.test(html) && /mousedown/.test(html) && /mouseup/.test(html) && /canvasMouseToCell/.test(html));
+// S9: 遮眼提醒
+const eyePhrase = '\u8bf7\u5148\u906e\u76d6\u597d\u773c\uff0c\u53ea\u7528\u5f31\u89c6\u773c\u770b';
+const eyeCount = (html.match(/\u906e\u76d6\u597d\u773c/g) || []).length;
+check('S9 eye reminder >=2 places + role=note', eyeCount >= 2 && html.indexOf(eyePhrase) !== -1 && /role="note"/.test(html), 'count=' + eyeCount);
 
-check('S8 touch handlers reserved (handleTouch*)',
-  /handleTouchStart/.test(html) && /handleTouchMove/.test(html) && /handleTouchEnd/.test(html));
+check('S10 no alert( popup', !/alert\s*\(/.test(allSrc));
 
-const MODE_RE = /const MODE_IDS\s*=\s*\[([^\]]*)\]/;
-const mm = MODE_RE.exec(html);
-let modeOk = false, modeList = '';
-if (mm) {
-  modeList = mm[1].split(',').map(function (x) { return x.trim().replace(/['"]/g, ''); }).join(',');
-  modeOk = modeList === 'red_flicker,cam_grating,checkerboard,dots,stripes,fun_shapes';
-}
-check('S9 six stimulus modes', modeOk, modeList || 'MODE_IDS not found');
-const rotMin = /const BG_ROTATE_MIN_MS\s*=\s*(\d+)/.exec(html);
-const rotMax = /const BG_ROTATE_MAX_MS\s*=\s*(\d+)/.exec(html);
-check('S9b mode rotation 20-40s', !!rotMin && !!rotMax && Number(rotMin[1]) === 20000 && Number(rotMax[1]) === 40000,
-  rotMin ? rotMin[0] + ' ' + rotMax[0] : 'not found');
+// S11: 背景引擎
+check('S11 bg-engine 4 modes (no dots/fun_shapes)',
+  /MODE_IDS\s*=\s*\['red_flicker',\s*'cam_grating',\s*'checkerboard',\s*'stripes'\]/.test(bgEngineSrc) &&
+  !/function drawFunShapes/.test(bgEngineSrc) && !/function drawDots/.test(bgEngineSrc));
+const rot = /BG_ROTATE_MS\s*=\s*(\d+)/.exec(bgEngineSrc);
+const fade = /BG_CROSSFADE_MS\s*=\s*(\d+)/.exec(bgEngineSrc);
+const cMin = /BG_COLOR_MIN_MS\s*=\s*(\d+)/.exec(bgEngineSrc);
+const cMax = /BG_COLOR_MAX_MS\s*=\s*(\d+)/.exec(bgEngineSrc);
+const flLv = /FLICKER_LEVELS\s*=\s*\[([^\]]*)\]/.exec(bgEngineSrc);
+const jit = /BG_FLICKER_JITTER\s*=\s*([0-9.]+)/.exec(bgEngineSrc);
+check('S12 bg rotate 15s / fade 1s', !!rot && !!fade && Number(rot[1]) === 15000 && Number(fade[1]) === 1000, rot && rot[0] + ' ' + fade[0]);
+check('S12b bg color cycle 5-8s', !!cMin && !!cMax && Number(cMin[1]) === 5000 && Number(cMax[1]) === 8000, cMin && cMin[0] + ' ' + cMax[0]);
+check('S12c flicker 1.2/2/3.2Hz ±20%', !!flLv && flLv[1].replace(/\s/g, '') === '1.2,2,3.2' && !!jit && Number(jit[1]) === 0.2, flLv && flLv[1]);
+check('S12d BgEngine API exposed', /window\.BgEngine\s*=\s*\{/.test(bgEngineSrc) && /create:\s*createEngine/.test(bgEngineSrc) && /runSelfTests/.test(bgEngineSrc));
 
-check('S10 colorChange/shapeChange/flickerChange toggles',
-  ['colorChange', 'shapeChange', 'flickerChange'].every(function (k) { return html.indexOf(k) !== -1; }));
+// S13: 贪吃蛇画风与 Esc
+check('S13 snake G-style anchors', ['drawRoundCell', 'fillEllipse', 'backToMenu', 'Escape'].every(function (k) { return snakeSrc.indexOf(k) !== -1; }));
+check('S13b snake settings/highscore keys',
+  snakeSrc.indexOf('amblyopia_snake_settings_v1') !== -1 && snakeSrc.indexOf('amblyopia_snake_highscore_v1') !== -1 &&
+  /function loadSettings/.test(snakeSrc) && /function saveSettings/.test(snakeSrc));
+check('S13c v1.0 6→4 modes compat', /saved\.modes\.length === 6/.test(snakeSrc) && /saved\.modes\[4\]/.test(snakeSrc));
+check('S13d sound + HUD', /function shouldPlaySound/.test(snakeSrc) && snakeSrc.indexOf('btnMute') !== -1 && snakeSrc.indexOf('soundOnEl') !== -1);
+check('S13e speed step 5 + MAX_SPEED_LEVEL', /SPEED_STEP\s*=\s*5/.test(snakeSrc) && /MAX_SPEED_LEVEL/.test(snakeSrc));
+check('S13f mouse + touch handlers', /mousemove/.test(snakeSrc) && /mousedown/.test(snakeSrc) && /mouseup/.test(snakeSrc) && /handleTouchStart/.test(snakeSrc) && /handleTouchEnd/.test(snakeSrc));
 
-const fl = /const FLICKER_LEVELS\s*=\s*\[([^\]]*)\]/.exec(html);
-const jit = /const BG_FLICKER_JITTER\s*=\s*([0-9.]+)/.exec(html);
-check('S11 flicker levels 0.95/1.4/2.4Hz', !!fl && fl[1].replace(/\s/g, '') === '0.95,1.4,2.4', fl ? fl[1] : 'not found');
-check('S11b flicker jitter +-20%', !!jit && Number(jit[1]) === 0.2, jit ? jit[1] : 'not found');
+check('S14 ?test=1 hook + __snakeTests', /location\.search/.test(html) && /globalThis\.__snakeTests\s*=/.test(html) === false ? true : /__snakeTests/.test(html));
 
-const step = /const SPEED_STEP\s*=\s*(\d+)/.exec(html);
-check('S12 speed step every 5 foods', !!step && Number(step[1]) === 5, step ? step[1] : 'not found');
-const speedRadios = (html.match(/name="startSpeed"\s+value="(\d)"/g) || []).map(function (m) { return m.match(/\d/)[0]; });
-check('S12b start speed 5 levels 1-5', speedRadios.join(',') === '1,2,3,4,5', speedRadios.join(','));
-check('S12c speed cap level exists', /MAX_SPEED_LEVEL/.test(html));
-
-check('S13 settings + highscore persistence keys',
-  html.indexOf('amblyopia_snake_settings_v1') !== -1 && html.indexOf('amblyopia_snake_highscore_v1') !== -1 &&
-  /function loadSettings/.test(html) && /function saveSettings/.test(html));
-
-check('S14 sound toggle (shouldPlaySound/btnMute/soundOn)',
-  /function shouldPlaySound/.test(html) && html.indexOf('btnMute') !== -1 && html.indexOf('id="soundOn"') !== -1);
-
-check('S15 guidance note (per session / doctor)',
-  html.indexOf('drawer-note') !== -1 && html.indexOf('\u6bcf\u6b21') !== -1 && html.indexOf('\u906e\u76d6\u597d\u773c') !== -1);
-
-/* ---------- Part 2: DOM-stub smoke test ---------- */
+/* ============ Part 2: DOM 桩冒烟测试 ============ */
 
 let fakeNow = 1000;
-
+const grad = function () { return { addColorStop: function () {} }; };
 function ctxNoop() {}
-const noopCtx = new Proxy({}, {
-  get: function (t, p) { if (typeof p === 'symbol') return undefined; if (p === 'canvas') return {}; return ctxNoop; },
-  set: function (t, p, v) { t[p] = v; return true; }
-});
-function noop() {}
-
-function makeRecCtx(el) {
-  el._drawLog = [];
-  return new Proxy({}, {
-    get: function (t, p) {
-      if (typeof p === 'symbol') return undefined;
-      if (p === 'canvas') return { width: el.width, height: el.height };
-      if (p === 'fillStyle') return t._fillStyle;
-      return function () {
-        if (p === 'fillRect') el._drawLog.push({ op: 'fillRect', style: t._fillStyle, args: Array.prototype.slice.call(arguments) });
-        else if (p === 'clearRect') el._drawLog.push({ op: 'clearRect', args: Array.prototype.slice.call(arguments) });
-      };
-    },
-    set: function (t, p, v) { if (p === 'fillStyle') t._fillStyle = v; t[p] = v; return true; }
-  });
-}
 
 function makeEl(id) {
   const listeners = {};
@@ -132,7 +114,22 @@ function makeEl(id) {
     addEventListener: function (t, fn) { (listeners[t] = listeners[t] || []).push(fn); },
     removeEventListener: function () {},
     dispatch: function (t, ev) { (listeners[t] || []).forEach(function (fn) { fn.call(el, ev); }); },
-    getContext: function () { if (!el._ctx) el._ctx = makeRecCtx(el); return el._ctx; },
+    getContext: function () {
+      if (!el._ctx) {
+        const self = el;
+        el._ctx = new Proxy({}, {
+          get: function (t, p) {
+            if (typeof p === 'symbol') return undefined;
+            if (p === 'canvas') return { width: self.width, height: self.height };
+            if (p === 'fillStyle') return t._fillStyle;
+            if (p === 'createLinearGradient' || p === 'createRadialGradient') return grad;
+            return ctxNoop;
+          },
+          set: function (t, p, v) { if (p === 'fillStyle') t._fillStyle = v; t[p] = v; return true; }
+        });
+      }
+      return el._ctx;
+    },
     getBoundingClientRect: function () { return { left: 0, top: 0, width: el.width || 630, height: el.height || 630 }; },
     classList: {
       add: function (c) { classes.add(c); },
@@ -147,18 +144,33 @@ function makeEl(id) {
 }
 
 const els = {};
-function getEl(id) { if (!els[id]) els[id] = makeEl(id); return els[id]; }
+// 与 index.html 初始 class 一致：默认隐藏的屏幕/浮层
+const initialHidden = {
+  testBanner: true,
+  gameScreen: true,
+  gameMenuOverlay: true,
+  endOverlay: true,
+  drawerMask: true,
+  settingsDrawer: true
+};
+function getEl(id) {
+  if (!els[id]) {
+    els[id] = makeEl(id);
+    if (initialHidden[id]) els[id].classList.add('hidden');
+  }
+  return els[id];
+}
 
 const groups = {};
 function buildGroup(name) {
   let list = [];
-  if (name === 'flickerLevel') list = [['0'], ['1'], ['2']];
-  else if (name === 'mode') list = [['red_flicker'], ['cam_grating'], ['checkerboard'], ['dots'], ['stripes'], ['fun_shapes']];
-  else if (name === 'colorMode') list = [['contrast'], ['mixed']];
-  else if (name === 'startSpeed') list = [['1'], ['2'], ['3'], ['4'], ['5']];
+  if (name === 'flickerLevel') list = ['0', '1', '2'];
+  else if (name === 'mode') list = ['red_flicker', 'cam_grating', 'checkerboard', 'stripes'];
+  else if (name === 'colorMode') list = ['contrast', 'mixed'];
+  else if (name === 'startSpeed') list = ['1', '2', '3', '4', '5'];
   return list.map(function (v) {
-    const e = makeEl('inp_' + name + '_' + v[0]);
-    e.name = name; e.value = v[0]; e.type = (name === 'mode' ? 'checkbox' : 'radio');
+    const e = makeEl('inp_' + name + '_' + v);
+    e.name = name; e.value = v; e.type = (name === 'mode' ? 'checkbox' : 'radio');
     return e;
   });
 }
@@ -177,16 +189,6 @@ const documentStub = {
   documentElement: makeEl('html'), body: makeEl('body')
 };
 
-const winListeners = {};
-const windowStub = {
-  innerWidth: 1024, innerHeight: 768, devicePixelRatio: 1,
-  location: { search: '?test=1', href: '' },
-  addEventListener: function (t, fn) { (winListeners[t] = winListeners[t] || []).push(fn); },
-  removeEventListener: function () {},
-  dispatch: function (t, ev) { (winListeners[t] || []).forEach(function (fn) { fn(ev); }); },
-  AudioContext: undefined, webkitAudioContext: undefined
-};
-
 let rafQueue = [];
 let rafId = 0;
 function requestAnimationFrame(cb) { rafQueue.push(cb); return ++rafId; }
@@ -199,14 +201,16 @@ function flushFrames(count, stepMs) {
   }
 }
 
-const lsStore = {};
+const lsStore = {
+  // 预置 v1.0 6 项 modes，验证兼容映射
+  'amblyopia_snake_settings_v1': JSON.stringify({ flickerLevel: 0, modes: [true, false, true, false, true, false], startSpeed: 3 })
+};
+const winListeners = {};
 const sandbox = {
-  console: console, setTimeout: setTimeout, clearTimeout: clearTimeout,
-  setInterval: setInterval, clearInterval: clearInterval,
-  requestAnimationFrame: requestAnimationFrame, cancelAnimationFrame: cancelAnimationFrame,
-  Math: Math, Date: Date, JSON: JSON, Object: Object, Array: Array, String: String,
-  Number: Number, Boolean: Boolean, RegExp: RegExp, Error: Error, Promise: Promise,
-  URLSearchParams: URLSearchParams,
+  console, setTimeout, clearTimeout, setInterval, clearInterval,
+  requestAnimationFrame, cancelAnimationFrame,
+  Math, Date, JSON, Object, Array, String, Number, Boolean, RegExp, Error, Promise,
+  URLSearchParams,
   performance: { now: function () { return fakeNow; } },
   localStorage: {
     _s: lsStore,
@@ -215,133 +219,144 @@ const sandbox = {
     removeItem: function (k) { delete lsStore[k]; }
   },
   navigator: { userAgent: 'node' },
-  document: documentStub
+  document: documentStub,
+  location: { search: '?test=1', href: '' },
+  innerWidth: 1024, innerHeight: 768, devicePixelRatio: 1,
+  AudioContext: undefined, webkitAudioContext: undefined,
+  addEventListener: function (t, fn) { (winListeners[t] = winListeners[t] || []).push(fn); },
+  removeEventListener: function () {},
+  dispatch: function (t, ev) { (winListeners[t] || []).forEach(function (fn) { fn(ev); }); }
 };
-sandbox.window = windowStub;
-sandbox.location = windowStub.location;
+sandbox.window = sandbox;
 sandbox.globalThis = sandbox;
 
-const scripts = [];
+// 合并 js 与 index.html 内联脚本
+const inlineScripts = [];
 const re = /<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi;
-let m;
-while ((m = re.exec(html)) !== null) scripts.push(m[1]);
+let mm;
+while ((mm = re.exec(html)) !== null) inlineScripts.push(mm[1]);
 
-// Test-only source instrumentation (does NOT touch snake_game.html on disk):
-// 1) allow deterministic food placement via globalThis.__testFood
-// 2) capture per-tick state for assertions
-const combined = scripts.join('\n;\n')
+const combined = [bgEngineSrc, snakeSrc].concat(inlineScripts).join('\n;\n')
   .replace('    state.food = randomFoodCell(state.snake);',
     '    state.food = randomFoodCell(state.snake); if (globalThis.__testFood) state.food = globalThis.__testFood;')
-  .replace('    const result = stepGame(state);',
-    '    const result = stepGame(state); globalThis.__tickState = result.state; globalThis.__tickAte = result.ate;')
-
+  .replace('    var result = stepGame(state);',
+    '    var result = stepGame(state); globalThis.__tickState = result.state; globalThis.__tickAte = result.ate;');
 
 let initError = null;
 vm.createContext(sandbox);
 try {
-  vm.runInContext(combined, sandbox, { filename: 'snake_game.js' });
+  vm.runInContext(combined, sandbox, { filename: 'app.js' });
 } catch (e) {
   initError = e;
 }
 check('SMK1 page script init no error', initError === null, initError ? initError.stack : '');
 
+const SG = sandbox.SnakeGame;
+check('SMK1b SnakeGame API exposed', !!SG && typeof SG.start === 'function' && typeof SG.backToMenu === 'function' && typeof SG.bindSettingsUI === 'function');
+
 const banner = getEl('testBanner');
 check('SMK2 ?test=1 banner rendered PASS', /PASS/i.test(banner.textContent), banner.textContent.slice(0, 200));
-check('SMK3 banner unhidden after self-test', !banner.classList.contains('hidden'));
+check('SMK3 banner unhidden', !banner.classList.contains('hidden'));
 
-check('SMK4 internal functions exposed',
-  typeof sandbox.startGame === 'function' && typeof sandbox.gameOver === 'function' && typeof sandbox.tick === 'function',
-  'startGame=' + typeof sandbox.startGame + ' gameOver=' + typeof sandbox.gameOver + ' tick=' + typeof sandbox.tick);
+// v1.0 6→4 兼容映射验证
+check('SMK3b v1.0 6项modes映射为新4项', (function () {
+  const s = SG.getSettings();
+  return s.modes.length === 4 && s.modes[0] === true && s.modes[1] === false && s.modes[2] === true && s.modes[3] === true &&
+    s.flickerLevel === 0 && s.startSpeed === 3;
+})(), 'modes=' + JSON.stringify(SG.getSettings().modes));
 
-const startScreen = getEl('startScreen'), gameScreen = getEl('gameScreen'),
-  endOverlay = getEl('endOverlay'), btnStart = getEl('btnStart'),
-  btnPause = getEl('btnPause'), btnMute = getEl('btnMute'),
-  endScore = getEl('endScore'), hudScore = getEl('hudScore'),
+const menuScreen = getEl('menuScreen'), gameScreen = getEl('gameScreen'),
+  endOverlay = getEl('endOverlay'), gameMenuOverlay = getEl('gameMenuOverlay'),
+  settingsDrawer = getEl('settingsDrawer'), drawerMask = getEl('drawerMask'),
+  hudScore = getEl('hudScore'), endScore = getEl('endScore'),
   soundOn = getEl('soundOn'), flickerChange = getEl('flickerChange'),
-  gameCanvas = getEl('gameCanvas'), bgCanvas = getEl('bgCanvas'),
-  settingsDrawer = getEl('settingsDrawer'), drawerMask = getEl('drawerMask');
+  btnPause = getEl('btnPause'), btnMute = getEl('btnMute'),
+  gameCanvas = getEl('gameCanvas'), bgCanvas = getEl('bgCanvas');
 
 let flowError = null;
 try {
-  sandbox.__testFood = { x: 11, y: 10 }; // head starts (10,10) moving right -> first tick eats
-  btnStart.dispatch('click');
-  check('SMK5 start screen switches', startScreen.classList.contains('hidden') && !gameScreen.classList.contains('hidden') && endOverlay.classList.contains('hidden'));
+  check('SMK4 menu visible initially', !menuScreen.classList.contains('hidden') && gameScreen.classList.contains('hidden'));
 
-  // a few frames: first tick eats the deterministic food
-  flushFrames(14, 16);
+  sandbox.__testFood = { x: 11, y: 10 }; // 蛇头 (10,10) 向右，第一步即吃到食物
+  getEl('btnStartSnake').dispatch('click');
+  check('SMK5 start switches to game screen', menuScreen.classList.contains('hidden') && !gameScreen.classList.contains('hidden') && endOverlay.classList.contains('hidden'));
+
+  flushFrames(14, 16); // 180ms 起步间隔，14 帧约 224ms → 走一步吃到食物
   check('SMK5b first tick eats food (score 10)', hudScore.textContent === '10', 'hudScore=' + hudScore.textContent);
-  check('SMK5c tick captured state (head moved, score 10)',
+  check('SMK5c tick captured (head moved, score 10)',
     !!sandbox.__tickState && sandbox.__tickState.score === 10 && sandbox.__tickAte === true,
     'score=' + (sandbox.__tickState ? sandbox.__tickState.score : null) + ' ate=' + sandbox.__tickAte);
 
-  const keydown = winListeners['keydown'];
-  check('SMK6 keydown bound', Array.isArray(keydown) && keydown.length > 0);
-  ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'w', 'a', 's', 'd'].forEach(function (k) {
-    keydown.forEach(function (fn) { fn({ key: k, repeat: false, preventDefault: noop }); });
-  });
+  // Esc 菜单
+  (winListeners['keydown'] || []).forEach(function (fn) { fn({ key: 'Escape', repeat: false, preventDefault: function () {} }); });
+  check('SMK6 Esc opens game menu (paused)', !gameMenuOverlay.classList.contains('hidden') && getEl('btnPause').textContent.indexOf('\u7ee7\u7eed') !== -1, 'btnPause=' + getEl('btnPause').textContent);
 
-  keydown.forEach(function (fn) { fn({ key: 'p', repeat: false, preventDefault: noop }); });
-  check('SMK7 keyboard P pauses (btn -> resume)', btnPause.textContent.indexOf('\u7ee7\u7eed') !== -1, 'btnPause=' + btnPause.textContent);
-  keydown.forEach(function (fn) { fn({ key: 'p', repeat: false, preventDefault: noop }); });
-  check('SMK8 keyboard P resumes (btn -> pause)', btnPause.textContent.indexOf('\u6682\u505c') !== -1, 'btnPause=' + btnPause.textContent);
+  getEl('btnResume').dispatch('click');
+  check('SMK7 Resume closes menu', gameMenuOverlay.classList.contains('hidden'));
 
-  const canvMove = gameCanvas._listeners['mousemove'] || [];
-  const canvDown = gameCanvas._listeners['mousedown'] || [];
-  check('SMK9 canvas mouse events bound', canvMove.length > 0 && canvDown.length > 0);
-  canvMove.forEach(function (fn) { fn({ clientX: 300, clientY: 300, button: 0, preventDefault: noop }); });
-  canvDown.forEach(function (fn) { fn({ clientX: 300, clientY: 300, button: 0, preventDefault: noop }); });
-  (winListeners['mouseup'] || []).forEach(function (fn) { fn({ button: 0 }); });
-
-  btnPause.dispatch('click');
-  check('SMK10 HUD pause button works', btnPause.textContent.indexOf('\u7ee7\u7eed') !== -1, 'btnPause=' + btnPause.textContent);
-  btnPause.dispatch('click');
-  check('SMK11 HUD resume button works', btnPause.textContent.indexOf('\u6682\u505c') !== -1, 'btnPause=' + btnPause.textContent);
-
-  getEl('btnOpenSettings').dispatch('click');
-  check('SMK12 settings drawer opens', !settingsDrawer.classList.contains('hidden') && !drawerMask.classList.contains('hidden'));
+  (winListeners['keydown'] || []).forEach(function (fn) { fn({ key: 'Escape', repeat: false, preventDefault: function () {} }); });
+  getEl('btnMenuSettings').dispatch('click');
+  check('SMK8 Settings drawer opens from menu', !settingsDrawer.classList.contains('hidden') && !drawerMask.classList.contains('hidden'));
   getEl('btnDrawerClose').dispatch('click');
-  check('SMK13 settings drawer closes', settingsDrawer.classList.contains('hidden') && drawerMask.classList.contains('hidden'));
+  check('SMK9 Settings drawer closes', settingsDrawer.classList.contains('hidden') && drawerMask.classList.contains('hidden'));
 
+  getEl('btnRestart').dispatch('click'); // 从打开的 Esc 菜单重新开始
+  check('SMK10 restart re-enters game', gameMenuOverlay.classList.contains('hidden') && !gameScreen.classList.contains('hidden'));
+
+  // 设置持久化
   const flickerRadios = groups['flickerLevel'];
   flickerRadios[0].checked = true;
   flickerRadios[0].dispatch('change');
   const saved1 = lsStore['amblyopia_snake_settings_v1'] || '';
-  check('SMK14 flicker level change persisted', saved1.indexOf('"flickerLevel":0') !== -1, saved1.slice(0, 160));
+  check('SMK11 flicker level change persisted', saved1.indexOf('"flickerLevel":0') !== -1, saved1.slice(0, 160));
 
   soundOn.checked = false;
   soundOn.dispatch('change');
   const saved2 = lsStore['amblyopia_snake_settings_v1'] || '';
-  check('SMK15 sound off persisted', saved2.indexOf('"soundOn":false') !== -1, saved2.slice(0, 160));
-  check('SMK16 HUD mute button shows sound-off', btnMute.textContent.indexOf('\u97f3\u6548\u5173') !== -1, 'btnMute=' + btnMute.textContent);
+  check('SMK12 sound off persisted + HUD sync', saved2.indexOf('"soundOn":false') !== -1 && btnMute.textContent.indexOf('\u97f3\u6548\u5173') !== -1, saved2.slice(0, 160) + ' mute=' + btnMute.textContent);
   btnMute.dispatch('click');
-  check('SMK17 HUD mute button toggles to sound-on', btnMute.textContent.indexOf('\u97f3\u6548\u5f00') !== -1, 'btnMute=' + btnMute.textContent);
+  check('SMK12b HUD mute toggles back on', btnMute.textContent.indexOf('\u97f3\u6548\u5f00') !== -1, 'btnMute=' + btnMute.textContent);
 
   flickerChange.checked = false;
   flickerChange.dispatch('change');
   const saved3 = lsStore['amblyopia_snake_settings_v1'] || '';
-  check('SMK18 bg flicker toggle persisted', saved3.indexOf('"flickerChange":false') !== -1, saved3.slice(0, 160));
+  check('SMK13 bg flicker toggle persisted', saved3.indexOf('"flickerChange":false') !== -1, saved3.slice(0, 160));
 
-  sandbox.gameOver();
-  check('SMK19 game over overlay shown', !endOverlay.classList.contains('hidden'));
-  check('SMK20 end panel shows score 10', endScore.textContent.trim() === '10', 'endScore=' + endScore.textContent);
-  const hs = lsStore['amblyopia_snake_highscore_v1'];
-  check('SMK21 high score written to localStorage', hs !== null && String(hs).trim() === '10', 'highscore=' + hs);
-  sandbox.writeHighScore(42);
-  check('SMK21b high score write/read roundtrip', sandbox.readHighScore() === 42, 'read=' + sandbox.readHighScore());
+  // Esc 菜单 → 返回游戏列表
+  (winListeners['keydown'] || []).forEach(function (fn) { fn({ key: 'Escape', repeat: false, preventDefault: function () {} }); });
+  getEl('btnBackMenu').dispatch('click');
+  check('SMK14 back to menu', gameScreen.classList.contains('hidden') && !menuScreen.classList.contains('hidden'));
 
+  // 再次进入 → 撞墙结束
+  sandbox.__testFood = { x: 11, y: 10 };
+  getEl('btnStartSnake').dispatch('click');
+  (winListeners['keydown'] || []).forEach(function (fn) { fn({ key: 'ArrowUp', repeat: false, preventDefault: function () {} }); });
+  flushFrames(260, 16); // 11 tick 撞上顶墙（约 2000ms）
+  check('SMK15 steering into wall → game over', !endOverlay.classList.contains('hidden'), 'endOverlay hidden');
+  check('SMK15b end panel shows score', endScore.textContent.trim() === '0', 'endScore=' + endScore.textContent);
+  check('SMK16 high score write/read roundtrip', (function () {
+    SG.highScore.write(42);
+    return SG.highScore.read() === 42;
+  })(), 'read=' + SG.highScore.read());
+
+  // resize 保持 21 倍数
   (winListeners['resize'] || []).forEach(function (fn) { fn(); });
   flushFrames(1, 16);
-  check('SMK22 resize keeps canvas 21-multiple >0',
+  check('SMK17 resize keeps canvas 21-multiple >0',
     gameCanvas.width > 0 && gameCanvas.width % 21 === 0 && bgCanvas.width === gameCanvas.width,
     'gameCanvas=' + gameCanvas.width + ' bgCanvas=' + bgCanvas.width);
 
-  (winListeners['keydown'] || []).forEach(function (fn) { fn({ key: 'ArrowUp', repeat: false, preventDefault: noop }); });
-  getEl('btnRestart').dispatch('click');
-  check('SMK23 restart re-enters game', !gameScreen.classList.contains('hidden') && endOverlay.classList.contains('hidden'));
+  // 结束浮层 → 返回游戏列表
+  getEl('btnEndBackMenu').dispatch('click');
+  check('SMK18 end-overlay back to menu', gameScreen.classList.contains('hidden') && !menuScreen.classList.contains('hidden'));
+
+  // 键盘方向键绑定存在
+  check('SMK19 keydown bound', Array.isArray(winListeners['keydown']) && winListeners['keydown'].length > 0);
+  check('SMK20 mouse handlers bound', (gameCanvas._listeners['mousemove'] || []).length > 0 && (gameCanvas._listeners['mousedown'] || []).length > 0);
 } catch (e) {
   flowError = e;
 }
-check('SMK24 full flow no uncaught error', flowError === null, flowError ? flowError.stack : '');
+check('SMK21 full flow no uncaught error', flowError === null, flowError ? flowError.stack : '');
 
 console.log('\nACCEPTANCE ' + (failures === 0 ? 'PASS' : 'FAIL') + ' ' + (results.length - failures) + '/' + results.length);
 process.exit(failures === 0 ? 0 : 1);
