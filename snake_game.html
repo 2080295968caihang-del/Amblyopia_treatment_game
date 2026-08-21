@@ -370,6 +370,7 @@ const SPEED_START_MS = 180;            // 起始速度（毫秒/格，默认中�
 const SPEED_MIN_MS = 60;               // 速度上限（最快）
 const SPEED_STEP = 5;                  // 每吃 5 个食物升一档
 const SPEED_DELTA_MS = 20;             // 每升一档速度减少的毫秒数
+const MAX_SPEED_LEVEL = 1 + Math.floor((SPEED_START_MS - SPEED_MIN_MS) / SPEED_DELTA_MS); // 速度上限对应的最大档位
 const FLICKER_LEVELS = [0.95, 1.4, 2.4]; // 慢/中/快 Hz
 const DIR_VECTORS = {                  // 方向 → 单位向量（模块级常量，避免每次调用重建）
   up: { x: 0, y: -1 },
@@ -465,7 +466,8 @@ function canSetDirection(currentDir, newDir) {
 
 // 输入层：把新方向写入 state.nextDir，反向时拒绝并返回 false（Task 3 接键盘/触控）
 function setDirection(state, dir) {
-  if (!canSetDirection(state.dir, dir)) return false;
+  // 按 nextDir 判反向：一 tick 内先 up 再 down（相对待生效方向的 180° 反向）也应被拒绝
+  if (!canSetDirection(state.nextDir || state.dir, dir)) return false;
   state.nextDir = dir;
   return true;
 }
@@ -622,6 +624,11 @@ function runSelfTests() {
     const s = createInitialState();
     return setDirection(s, 'up') === true && s.nextDir === 'up';
   })(), '实际被拒绝');
+  check('禁止反向: 一 tick 内先 up 再 down 被拒绝', (function () {
+    const s = createInitialState();
+    setDirection(s, 'up'); // 相对 right 垂直，允许 → nextDir='up'
+    return setDirection(s, 'down') === false && s.nextDir === 'up';
+  })(), '实际未拒绝或 nextDir 被改写');
   check('禁止反向: stepGame 防御直接置入的反向 nextDir', (function () {
     const s = createInitialState();
     s.food = { x: 20, y: 20 };
@@ -745,16 +752,27 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   let lastFrameTs = null;             // 上一帧时间戳（用于时间累积）
   let accMs = 0;                      // 距下一次移动累积的毫秒数
 
-  // 读取最高分（localStorage 缺失或非法时返回 0）
+  // 读取最高分（localStorage 缺失、非法或读取异常时返回 0）
   function readHighScore() {
-    const raw = (typeof localStorage !== 'undefined') ? localStorage.getItem(HIGH_SCORE_KEY) : null;
-    const n = parseInt(raw, 10);
-    return Number.isFinite(n) && n > 0 ? n : 0;
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const raw = localStorage.getItem(HIGH_SCORE_KEY);
+        const n = parseInt(raw, 10);
+        return Number.isFinite(n) && n > 0 ? n : 0;
+      }
+    } catch (e) {
+      // 隐私模式 / file:// 受限等场景下读取失败，静默按 0 处理
+    }
+    return 0;
   }
 
-  // 写入最高分
+  // 写入最高分（写入失败如配额满时静默忽略）
   function writeHighScore(score) {
-    if (typeof localStorage !== 'undefined') localStorage.setItem(HIGH_SCORE_KEY, String(score));
+    try {
+      if (typeof localStorage !== 'undefined') localStorage.setItem(HIGH_SCORE_KEY, String(score));
+    } catch (e) {
+      // 静默忽略：最高分无法持久化不影响游戏进行
+    }
   }
 
   // 同步最高分：超过历史最高分时立即持久化，返回当前最高分
@@ -771,7 +789,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   function updateHud() {
     document.getElementById('hudScore').textContent = String(state.score);
     document.getElementById('hudHighScore').textContent = String(syncHighScore());
-    document.getElementById('hudSpeed').textContent = String(1 + Math.floor(state.foodsEaten / SPEED_STEP));
+    document.getElementById('hudSpeed').textContent = String(Math.min(1 + Math.floor(state.foodsEaten / SPEED_STEP), MAX_SPEED_LEVEL));
   }
 
   // 在 #gameCanvas 上绘制蛇与食物（网格按 canvas 尺寸均分）
@@ -797,7 +815,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     }
   }
 
-  // 每 tick 走一步：应用 stepGame 结果、更新 HUD、必要时触发结束
+  // 每 tick 走一步：只更新逻辑与 HUD，渲染统一在帧末进行
   function tick() {
     const result = stepGame(state);
     state = result.state;
@@ -808,9 +826,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     if (result.gameOver) {
       // TODO(Task6): 播放音效（游戏结束）
       gameOver();
-      return;
     }
-    renderGame();
   }
 
   // 主循环：requestAnimationFrame + 时间累积，达到 speedForLevel(foodsEaten) 毫秒走一格
@@ -823,14 +839,17 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
       const dt = lastFrameTs === null ? 0 : Math.min(timestamp - lastFrameTs, 250);
       lastFrameTs = timestamp;
       accMs += dt;
-      const interval = speedForLevel(state.foodsEaten);
       let steps = 0;
-      // 帧间隔抖动时一次最多补 3 格，避免长时间卡顿后瞬间连跳
-      while (accMs >= interval && steps < 3 && state.running && !state.paused && !state.gameOver) {
+      // 帧间隔抖动时一次最多补 3 格，避免长时间卡顿后瞬间连跳；每步重取速度，加速即时生效
+      while (state.running && !state.paused && !state.gameOver && steps < 3) {
+        const interval = speedForLevel(state.foodsEaten);
+        if (accMs < interval) break;
         accMs -= interval;
         steps++;
         tick();
       }
+      if (state.gameOver) return; // 结束后不再调度空转帧
+      renderGame();               // 帧末统一渲染一次（含 catch-up 多步后的最新状态）
     } else {
       // 暂停/未运行时清零累积，避免恢复瞬间跳格
       accMs = 0;
