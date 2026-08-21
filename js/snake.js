@@ -635,4 +635,702 @@
 
   window.SnakeGame = { name: 'snake' };
   window.SnakeGame.runSelfTests = runSelfTests;
+
+﻿/* ---------- 浏览器端初始化（Node 下自动跳过） ---------- */
+if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+  /* ---------- 设置持久化（localStorage，v1.0 键名与 6→4 模式兼容） ---------- */
+  var SETTINGS_KEY = 'amblyopia_snake_settings_v1';
+  var HIGH_SCORE_KEY = 'amblyopia_snake_highscore_v1';
+  var defaultSettings = {
+    flickerLevel: 1,                  // 0/1/2 → 1.2/2/3.2 Hz
+    modes: [true, true, true, true],  // 4 种模式是否参与轮换
+    colorMode: 'contrast',            // 'contrast' 高对比 | 'mixed' 混合（带彩色点缀）
+    startSpeed: 2,                    // 起始速度档 1–5 → initialSpeedMs
+    soundOn: true,                    // 音效开关
+    colorChange: true,                // 颜色变化开关
+    shapeChange: true,                // 形状（模式）变化开关
+    flickerChange: true               // 闪烁开关
+  };
+
+  // 从 localStorage 读取设置：解析失败或字段缺失时用默认值补齐。
+  // v1.0 的 modes 为 6 项，加载时映射为新 4 项（取旧索引 0,1,2,4）。
+  function loadSettings() {
+    var out = {
+      flickerLevel: defaultSettings.flickerLevel,
+      modes: defaultSettings.modes.slice(),
+      colorMode: defaultSettings.colorMode,
+      startSpeed: defaultSettings.startSpeed,
+      soundOn: defaultSettings.soundOn,
+      colorChange: defaultSettings.colorChange,
+      shapeChange: defaultSettings.shapeChange,
+      flickerChange: defaultSettings.flickerChange
+    };
+    try {
+      if (typeof localStorage !== 'undefined') {
+        var raw = localStorage.getItem(SETTINGS_KEY);
+        if (!raw) return out;
+        var saved = JSON.parse(raw);
+        if (saved && typeof saved === 'object') {
+          if (Number.isFinite(saved.flickerLevel)) {
+            var fl = Math.floor(saved.flickerLevel);
+            if (fl >= 0 && fl < 3) out.flickerLevel = fl;
+          }
+          if (Array.isArray(saved.modes)) {
+            if (saved.modes.length === 6) {
+              out.modes = [saved.modes[0] === true, saved.modes[1] === true, saved.modes[2] === true, saved.modes[4] === true];
+            } else {
+              for (var i = 0; i < out.modes.length; i++) {
+                if (i < saved.modes.length) out.modes[i] = saved.modes[i] === true;
+              }
+            }
+          }
+          if (saved.colorMode === 'contrast' || saved.colorMode === 'mixed') out.colorMode = saved.colorMode;
+          if (Number.isFinite(saved.startSpeed)) {
+            var sp = Math.floor(saved.startSpeed);
+            if (sp >= 1 && sp <= 5) out.startSpeed = sp;
+          }
+          if (typeof saved.soundOn === 'boolean') out.soundOn = saved.soundOn;
+          if (typeof saved.colorChange === 'boolean') out.colorChange = saved.colorChange;
+          if (typeof saved.shapeChange === 'boolean') out.shapeChange = saved.shapeChange;
+          if (typeof saved.flickerChange === 'boolean') out.flickerChange = saved.flickerChange;
+        }
+      }
+    } catch (e) {
+      // 解析失败（损坏 JSON / localStorage 不可用）：静默回退默认
+    }
+    return out;
+  }
+
+  // 写入设置（写入失败如配额满时静默忽略，不影响游戏进行）
+  function saveSettings(s) {
+    try {
+      if (typeof localStorage !== 'undefined') localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
+    } catch (e) {
+      // 静默忽略
+    }
+  }
+
+  var settings = loadSettings();
+
+  /* ---------- Web Audio 合成音效 ---------- */
+  // 播放开关判定：只有 settings.soundOn === true 才出声
+  function shouldPlaySound(settingsObj) {
+    return !!settingsObj && settingsObj.soundOn === true;
+  }
+
+  var audioCtx = null;
+
+  // 懒创建的共享 AudioContext（浏览器自动播放策略：首次用户交互时创建/恢复）
+  function ensureAudioContext() {
+    if (typeof window === 'undefined') return null;
+    var AC = window.AudioContext || window.webkitAudioContext;
+    if (typeof AC === 'undefined') return null;
+    try {
+      if (!audioCtx) audioCtx = new AC();
+      if (audioCtx.state === 'suspended') audioCtx.resume().catch(function () { /* 静默忽略 */ });
+      return audioCtx;
+    } catch (e) {
+      return null; // 音频设备不可用等异常：静默忽略，不影响游戏
+    }
+  }
+
+  // 通用单音合成：freq 起始频率(Hz)、duration 时长(s)、type 波形、volume 音量(0-1)；
+  // endFreq 可选：大于 0 时频率在 duration 内平滑下滑到 endFreq。
+  function playTone(freq, duration, type, volume, endFreq) {
+    if (!shouldPlaySound(settings)) return;
+    var ctx = ensureAudioContext();
+    if (!ctx) return;
+    try {
+      var osc = ctx.createOscillator();
+      var gain = ctx.createGain();
+      var t0 = ctx.currentTime;
+      gain.gain.setValueAtTime(0.0001, t0);
+      gain.gain.exponentialRampToValueAtTime(volume, t0 + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + duration);
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, t0);
+      if (typeof endFreq === 'number' && endFreq > 0 && endFreq !== freq) {
+        osc.frequency.exponentialRampToValueAtTime(endFreq, t0 + duration);
+      }
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.onended = function () { osc.disconnect(); gain.disconnect(); };
+      osc.start(t0);
+      osc.stop(t0 + duration + 0.02);
+    } catch (e) {
+      // 静默忽略：任何音频异常都不影响游戏逻辑
+    }
+  }
+
+  // 吃到食物：短促高音"叮"（880Hz 方波，0.08s）
+  function eatSound() {
+    playTone(880, 0.08, 'square', 0.25);
+  }
+
+  // 游戏结束：低音下滑提示（220Hz 滑到 110Hz，0.5s 三角波）
+  function overSound() {
+    playTone(220, 0.5, 'triangle', 0.3, 110);
+  }
+
+  /* ---------- 游戏状态与循环 ---------- */
+  var state = createInitialState();
+  var animationId = null;     // 主循环 rAF 句柄
+  var lastFrameTs = null;     // 上一帧时间戳（用于时间累积）
+  var accMs = 0;              // 距下一次移动累积的毫秒数
+  var lastMouseCell = null;   // 鼠标在游戏屏上的最近目标格
+  var bgEngine = null;        // 共享背景引擎实例（BgEngine.create）
+  var bgLoopId = null;        // 背景循环 rAF 句柄
+
+  // 读取最高分（localStorage 缺失、非法或读取异常时返回 0）
+  function readHighScore() {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        var raw = localStorage.getItem(HIGH_SCORE_KEY);
+        var n = parseInt(raw, 10);
+        return Number.isFinite(n) && n > 0 ? n : 0;
+      }
+    } catch (e) {
+      // 隐私模式 / file:// 受限等场景下读取失败，静默按 0 处理
+    }
+    return 0;
+  }
+
+  // 写入最高分（写入失败如配额满时静默忽略）
+  function writeHighScore(score) {
+    try {
+      if (typeof localStorage !== 'undefined') localStorage.setItem(HIGH_SCORE_KEY, String(score));
+    } catch (e) {
+      // 静默忽略
+    }
+  }
+
+  // 同步最高分：超过历史最高分时立即持久化，返回当前最高分
+  function syncHighScore() {
+    var high = readHighScore();
+    if (state.score > high) {
+      writeHighScore(state.score);
+      return state.score;
+    }
+    return high;
+  }
+
+  // 刷新 HUD：分数 / 最高分 / 速度档（档位基于当前实际间隔计算，家长起始速度即时反映）
+  function updateHud() {
+    document.getElementById('hudScore').textContent = String(state.score);
+    document.getElementById('hudHighScore').textContent = String(syncHighScore());
+    document.getElementById('hudSpeed').textContent = String(speedLevelForDisplay(state.foodsEaten, initialSpeedMs(settings.startSpeed)));
+  }
+
+  // HUD 暂停按钮文案随暂停状态同步（⏸ 暂停 / ▶ 继续）
+  var btnPause = document.getElementById('btnPause');
+  function syncPauseButton() {
+    if (btnPause) btnPause.textContent = state.paused ? '▶ 继续' : '⏸ 暂停';
+  }
+  syncPauseButton();
+
+  // 背景设置即时生效：游戏运行中通知引擎应用最新设置
+  function applyBgSettings() {
+    if (bgEngine && state.running) bgEngine.applySettings(settings);
+  }
+
+  // 背景循环：独立 rAF，每帧调用引擎 draw(now)（引擎内部处理过渡/配色/闪烁）
+  function bgLoop(timestamp) {
+    bgLoopId = null;
+    if (!state.running || state.paused || state.gameOver) return;
+    if (bgEngine) bgEngine.draw(timestamp);
+    bgLoopId = requestAnimationFrame(bgLoop);
+  }
+
+  // 启动背景循环：已在运行时不重复启动
+  function startBgLoop() {
+    if (!bgEngine || bgLoopId !== null) return;
+    if (!state.running || state.paused || state.gameOver) return;
+    bgLoopId = requestAnimationFrame(bgLoop);
+  }
+
+  // 停止背景循环：画布保留当前帧
+  function stopBgLoop() {
+    if (bgLoopId !== null) {
+      cancelAnimationFrame(bgLoopId);
+      bgLoopId = null;
+    }
+  }
+
+  /* ---------- G 画风渲染（圆角大色块 + 大眼睛 + 红果） ---------- */
+  // 圆角矩形路径
+  function drawRoundCell(ctx, x, y, size, radius) {
+    ctx.beginPath();
+    ctx.moveTo(x + radius, y);
+    ctx.arcTo(x + size, y, x + size, y + size, radius);
+    ctx.arcTo(x + size, y + size, x, y + size, radius);
+    ctx.arcTo(x, y + size, x, y, radius);
+    ctx.arcTo(x, y, x + size, y, radius);
+    ctx.closePath();
+  }
+
+  // 椭圆填充（兼容性：用 translate/scale/arc 实现）
+  function fillEllipse(ctx, cx, cy, rx, ry, rot) {
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(rot || 0);
+    ctx.scale(rx, ry);
+    ctx.beginPath();
+    ctx.arc(0, 0, 1, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // 在 #gameCanvas 上绘制蛇与食物（画布透明，叠加在背景引擎之上）
+  function renderGame() {
+    var canvas = document.getElementById('gameCanvas');
+    var ctx = canvas.getContext('2d');
+    var cell = canvas.width / GRID_SIZE;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    // 蛇身：深色外轮廓 + 深绿渐变圆角大色块
+    for (var i = state.snake.length - 1; i >= 1; i--) {
+      var seg = state.snake[i];
+      var x = seg.x * cell, y = seg.y * cell;
+      drawRoundCell(ctx, x + 1, y + 1, cell - 2, cell * 0.3);
+      ctx.fillStyle = '#0d3318';
+      ctx.fill();
+      var gb = ctx.createLinearGradient(x, y, x + cell, y + cell);
+      gb.addColorStop(0, '#43A047');
+      gb.addColorStop(1, '#2E7D32');
+      drawRoundCell(ctx, x + 2.5, y + 2.5, cell - 5, cell * 0.28);
+      ctx.fillStyle = gb;
+      ctx.fill();
+    }
+    // 蛇头：亮绿 + 白底黑瞳大眼睛（眼睛随朝向偏移）
+    var head = state.snake[0];
+    var hx = head.x * cell, hy = head.y * cell;
+    drawRoundCell(ctx, hx + 1, hy + 1, cell - 2, cell * 0.32);
+    ctx.fillStyle = '#0d3318';
+    ctx.fill();
+    var gh = ctx.createLinearGradient(hx, hy, hx + cell, hy + cell);
+    gh.addColorStop(0, '#8CE05A');
+    gh.addColorStop(1, '#4CAF50');
+    drawRoundCell(ctx, hx + 2.5, hy + 2.5, cell - 5, cell * 0.3);
+    ctx.fillStyle = gh;
+    ctx.fill();
+    var eyeR = cell * 0.17;
+    var ex = hx + cell / 2, ey = hy + cell / 2;
+    if (state.dir === 'right') ex += cell * 0.15;
+    else if (state.dir === 'left') ex -= cell * 0.15;
+    else if (state.dir === 'up') ey -= cell * 0.15;
+    else if (state.dir === 'down') ey += cell * 0.15;
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.arc(ex - cell * 0.17, ey, eyeR, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(ex + cell * 0.17, ey, eyeR, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#1a1a1a';
+    ctx.beginPath(); ctx.arc(ex - cell * 0.17, ey, eyeR * 0.55, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(ex + cell * 0.17, ey, eyeR * 0.55, 0, Math.PI * 2); ctx.fill();
+    // 食物：大红圆果（深色描边 + 径向渐变）+ 绿叶片 + 白色高光
+    if (state.food) {
+      var fx = state.food.x * cell + cell / 2, fy = state.food.y * cell + cell / 2;
+      var fr = cell * 0.42;
+      ctx.fillStyle = '#1a1a1a';
+      ctx.beginPath(); ctx.arc(fx, fy, fr + 2, 0, Math.PI * 2); ctx.fill();
+      var gfr = ctx.createRadialGradient(fx - fr * 0.3, fy - fr * 0.3, fr * 0.1, fx, fy, fr);
+      gfr.addColorStop(0, '#ff6b4a');
+      gfr.addColorStop(1, '#d32f2f');
+      ctx.fillStyle = gfr;
+      ctx.beginPath(); ctx.arc(fx, fy, fr, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#2e7d32';
+      fillEllipse(ctx, fx + fr * 0.3, fy - fr * 0.95, fr * 0.5, fr * 0.22, -0.6);
+      fillEllipse(ctx, fx - fr * 0.2, fy - fr * 0.95, fr * 0.42, fr * 0.2, 0.5);
+      ctx.fillStyle = 'rgba(255,255,255,.85)';
+      ctx.beginPath(); ctx.arc(fx - fr * 0.3, fy - fr * 0.3, fr * 0.18, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  // 每 tick 走一步：只更新逻辑与 HUD，渲染统一在帧末进行
+  function tick() {
+    // 鼠标跟随：每 tick 由蛇头到鼠标的向量取主导轴方向
+    if (state.mouseActive && lastMouseCell) {
+      steerByMouse(state, lastMouseCell);
+    }
+    var result = stepGame(state);
+    state = result.state;
+    if (result.ate) {
+      eatSound(); // 吃到食物：短促高音"叮"
+      updateHud();
+    }
+    if (result.gameOver) {
+      overSound(); // 游戏结束：低音下滑提示
+      gameOver();
+    }
+  }
+
+  // 主循环：requestAnimationFrame + 时间累积，达到 speedForLevel(foodsEaten) 毫秒走一格
+  function loop(timestamp) {
+    if (state.gameOver) {
+      animationId = null;
+      return;
+    }
+    if (state.running && !state.paused) {
+      startBgLoop(); // 背景循环随游戏运行启停（暂停时 bgLoop 自行停止并保留帧）
+      var dt = lastFrameTs === null ? 0 : Math.min(timestamp - lastFrameTs, 250);
+      lastFrameTs = timestamp;
+      accMs += dt;
+      var steps = 0;
+      var baseMs = initialSpeedMs(settings.startSpeed); // 家长设置的起始速度档
+      while (state.running && !state.paused && !state.gameOver && steps < 3) {
+        var interval = speedForLevel(state.foodsEaten, baseMs);
+        if (accMs < interval) break;
+        accMs -= interval;
+        steps++;
+        tick();
+      }
+      if (state.gameOver) return; // 结束后不再调度空转帧
+      renderGame();               // 帧末统一渲染一次（含 catch-up 多步后的最新状态）
+    } else {
+      // 暂停/未运行时清零累积，避免恢复瞬间跳格
+      accMs = 0;
+      lastFrameTs = null;
+    }
+    animationId = requestAnimationFrame(loop);
+  }
+
+  // 游戏结束：停止主循环、更新最高分、显示结束浮层
+  function gameOver() {
+    state.running = false;
+    state.gameOver = true;
+    state.menuOpen = false;
+    stopBgLoop();
+    if (bgEngine) bgEngine.pause(); // 结束浮层覆盖：背景冻结并保留当前帧
+    syncHighScore();
+    document.getElementById('endScore').textContent = String(state.score);
+    document.getElementById('endHighScore').textContent = String(readHighScore());
+    document.getElementById('endOverlay').classList.remove('hidden');
+    syncPauseButton();
+  }
+
+  // 开始 / 再玩一次：重置状态并启动主循环与背景引擎
+  function startGame() {
+    if (shouldPlaySound(settings)) ensureAudioContext(); // 音效开启才解锁音频（静音时懒创建）
+    state = createInitialState();
+    state.food = randomFoodCell(state.snake);
+    state.running = true;
+    if (!bgEngine) bgEngine = window.BgEngine.create(document.getElementById('bgCanvas'), settings);
+    bgEngine.start();  // 首次：初始化新图案；已在运行：空操作
+    bgEngine.resume(); // 从结束/暂停恢复：接续相位（未暂停时为空操作）
+    document.getElementById('endOverlay').classList.add('hidden');
+    document.getElementById('gameMenuOverlay').classList.add('hidden');
+    document.getElementById('settingsDrawer').classList.add('hidden');
+    document.getElementById('drawerMask').classList.add('hidden');
+    accMs = 0;
+    lastFrameTs = null;
+    lastMouseCell = null; // 跨局清除鼠标目标格，避免残留跟随
+    updateHud();
+    syncPauseButton();
+    renderGame();
+    startBgLoop();
+    cancelAnimationFrame(animationId);
+    animationId = requestAnimationFrame(loop);
+  }
+
+  // 重新开始（Esc 菜单 / 结束浮层）：关闭浮层并重新开局
+  function restartGame() {
+    document.getElementById('gameMenuOverlay').classList.add('hidden');
+    document.getElementById('endOverlay').classList.add('hidden');
+    state.menuOpen = false;
+    startGame();
+  }
+
+  /* ---------- Esc 游戏菜单（继续 / 设置 / 重新开始 / 返回游戏列表） ---------- */
+  function openGameMenu() {
+    if (!state.running || state.gameOver || state.menuOpen) return;
+    state.paused = true;
+    state.menuOpen = true;
+    if (bgEngine) bgEngine.pause();
+    document.getElementById('gameMenuOverlay').classList.remove('hidden');
+    syncPauseButton();
+  }
+
+  function closeGameMenu() {
+    if (!state.menuOpen) return;
+    state.menuOpen = false;
+    state.paused = false;
+    if (bgEngine) bgEngine.resume();
+    document.getElementById('gameMenuOverlay').classList.add('hidden');
+    syncPauseButton();
+  }
+
+  // 返回游戏列表：停止主循环与背景引擎，回到菜单页
+  function backToMenu() {
+    state.running = false;
+    state.gameOver = false;
+    state.paused = false;
+    state.menuOpen = false;
+    if (animationId !== null) { cancelAnimationFrame(animationId); animationId = null; }
+    stopBgLoop();
+    if (bgEngine) bgEngine.stop();
+    document.getElementById('gameMenuOverlay').classList.add('hidden');
+    document.getElementById('endOverlay').classList.add('hidden');
+    document.getElementById('settingsDrawer').classList.add('hidden');
+    document.getElementById('drawerMask').classList.add('hidden');
+    if (window.App && window.App.backFromGame) window.App.backFromGame();
+    else {
+      document.getElementById('gameScreen').classList.add('hidden');
+      document.getElementById('menuScreen').classList.remove('hidden');
+    }
+  }
+
+  /* ---------- 家长设置抽屉（菜单页与游戏内共用） ---------- */
+  function openSettingsDrawer() {
+    document.getElementById('drawerMask').classList.remove('hidden');
+    document.getElementById('settingsDrawer').classList.remove('hidden');
+  }
+
+  function closeSettingsDrawer() {
+    document.getElementById('drawerMask').classList.add('hidden');
+    document.getElementById('settingsDrawer').classList.add('hidden');
+  }
+
+  // 回填一组单选按钮的选中态（value 匹配）
+  function backfillRadio(name, value) {
+    var radios = document.querySelectorAll('input[name="' + name + '"]');
+    for (var i = 0; i < radios.length; i++) {
+      radios[i].checked = radios[i].value === String(value);
+    }
+  }
+
+  // 绑定一组单选按钮：onPick 写入 settings 并持久化，afterApply 通知背景引擎
+  function bindRadios(name, onPick, afterApply) {
+    var radios = document.querySelectorAll('input[name="' + name + '"]');
+    for (var i = 0; i < radios.length; i++) {
+      radios[i].addEventListener('change', function () {
+        if (!this.checked) return;
+        onPick(this.value);
+        saveSettings(settings);
+        if (afterApply) afterApply();
+        else applyBgSettings();
+      });
+    }
+  }
+
+  // 模式勾选循环：按 BgEngine.MODE_IDS 索引写入 settings.modes
+  var modeBoxes = document.querySelectorAll('input[name="mode"]');
+  var MODE_IDS = (window.BgEngine && window.BgEngine.MODE_IDS) || ['red_flicker', 'cam_grating', 'checkerboard', 'stripes'];
+  for (var mi = 0; mi < modeBoxes.length; mi++) {
+    (function (box) {
+      var idx = MODE_IDS.indexOf(box.value);
+      if (idx < 0) return;
+      box.checked = !!settings.modes[idx];
+      box.addEventListener('change', function () {
+        settings.modes[idx] = box.checked;
+        saveSettings(settings);
+        applyBgSettings();
+      });
+    })(modeBoxes[mi]);
+  }
+
+  // HUD 静音按钮与设置抽屉音效开关同步
+  var soundOnEl = document.getElementById('soundOn');
+  var btnMute = document.getElementById('btnMute');
+  function updateMuteButton() {
+    if (!btnMute) return;
+    btnMute.textContent = settings.soundOn ? '🔊 音效开' : '🔇 音效关';
+  }
+  if (soundOnEl) {
+    soundOnEl.checked = !!settings.soundOn;
+    soundOnEl.addEventListener('change', function () {
+      settings.soundOn = soundOnEl.checked;
+      saveSettings(settings);
+      updateMuteButton();
+    });
+  }
+  if (btnMute) {
+    btnMute.addEventListener('click', function () {
+      settings.soundOn = !settings.soundOn;
+      saveSettings(settings);
+      updateMuteButton();
+      if (soundOnEl) soundOnEl.checked = settings.soundOn;
+      ensureAudioContext();
+    });
+  }
+  updateMuteButton();
+
+  // 背景变化三开关（id 与 settings 键同名）
+  var bgCheckboxKeys = ['colorChange', 'shapeChange', 'flickerChange'];
+  for (var bi = 0; bi < bgCheckboxKeys.length; bi++) {
+    (function (key) {
+      var el = document.getElementById(key);
+      if (!el) return;
+      el.checked = !!settings[key];
+      el.addEventListener('change', function () {
+        settings[key] = el.checked;
+        saveSettings(settings);
+        applyBgSettings();
+      });
+    })(bgCheckboxKeys[bi]);
+  }
+
+  // 一次性绑定设置抽屉（菜单页与游戏屏共用同一 DOM，避免重复监听）
+  var uiBound = false;
+  function bindSettingsUI() {
+    if (uiBound) return;
+    uiBound = true;
+    backfillRadio('flickerLevel', settings.flickerLevel);
+    bindRadios('flickerLevel', function (v) { settings.flickerLevel = Number(v); });
+    backfillRadio('colorMode', settings.colorMode);
+    bindRadios('colorMode', function (v) { settings.colorMode = v; });
+    backfillRadio('startSpeed', settings.startSpeed);
+    bindRadios('startSpeed', function (v) { settings.startSpeed = Number(v); });
+    var btnOpenSettings = document.getElementById('btnOpenSettings');
+    if (btnOpenSettings) btnOpenSettings.addEventListener('click', openSettingsDrawer);
+    var btnDrawerClose = document.getElementById('btnDrawerClose');
+    if (btnDrawerClose) btnDrawerClose.addEventListener('click', closeSettingsDrawer);
+    var drawerMask = document.getElementById('drawerMask');
+    if (drawerMask) drawerMask.addEventListener('click', closeSettingsDrawer);
+    var btnMenuSettings = document.getElementById('btnMenuSettings');
+    if (btnMenuSettings) btnMenuSettings.addEventListener('click', openSettingsDrawer);
+    var btnResume = document.getElementById('btnResume');
+    if (btnResume) btnResume.addEventListener('click', closeGameMenu);
+    var btnRestart = document.getElementById('btnRestart');
+    if (btnRestart) btnRestart.addEventListener('click', restartGame);
+    var btnBackMenu = document.getElementById('btnBackMenu');
+    if (btnBackMenu) btnBackMenu.addEventListener('click', backToMenu);
+    var btnPlayAgain = document.getElementById('btnPlayAgain');
+    if (btnPlayAgain) btnPlayAgain.addEventListener('click', restartGame);
+    var btnEndBackMenu = document.getElementById('btnEndBackMenu');
+    if (btnEndBackMenu) btnEndBackMenu.addEventListener('click', backToMenu);
+    if (btnPause) {
+      btnPause.addEventListener('click', function () {
+        if (!state.running || state.gameOver) return;
+        if (state.menuOpen) closeGameMenu();
+        else openGameMenu();
+      });
+    }
+  }
+
+  /* ---------- 输入控制：键盘（方向键 / WASD + 空格、P 暂停 + Esc 菜单） ---------- */
+  function onKeyDown(e) {
+    if (e.repeat) return; // 长按重复触发跳过
+    if (!state.running || state.gameOver) return;
+    if (e.key === 'Escape') {
+      if (state.menuOpen) closeGameMenu();
+      else openGameMenu();
+      e.preventDefault();
+      return;
+    }
+    if (handleGameKey(state, e.key)) {
+      if (e.key === ' ' || e.key === 'p' || e.key === 'P') {
+        syncPauseButton();
+        // 与 Esc 菜单共用暂停语义：暂停时打开菜单，恢复时关闭
+        if (state.paused && !state.menuOpen) openGameMenu();
+        else if (!state.paused && state.menuOpen) closeGameMenu();
+      }
+      e.preventDefault();
+    }
+  }
+  window.addEventListener('keydown', onKeyDown);
+
+  /* ---------- 输入控制：鼠标 ---------- */
+  var gameCanvasEl = document.getElementById('gameCanvas');
+
+  // 把鼠标事件坐标换算为网格坐标（相对 #gameCanvas，按实际显示尺寸等比换算）
+  function canvasMouseToCell(e) {
+    var rect = gameCanvasEl.getBoundingClientRect();
+    var x = Math.floor(((e.clientX - rect.left) / rect.width) * GRID_SIZE);
+    var y = Math.floor(((e.clientY - rect.top) / rect.height) * GRID_SIZE);
+    return { x: x, y: y };
+  }
+
+  // 鼠标在游戏屏移动：记录目标格并启用鼠标跟随
+  function onMouseMove(e) {
+    lastMouseCell = canvasMouseToCell(e);
+    state.mouseActive = true;
+  }
+
+  // 按住左键：锁定跟随（鼠标不动也持续朝目标格转向）
+  function onMouseDown(e) {
+    if (e.button === 0) {
+      lastMouseCell = canvasMouseToCell(e);
+      state.mouseActive = true;
+    }
+  }
+
+  // 松开左键：恢复键盘优先
+  function onMouseUp(e) {
+    if (e.button === 0) state.mouseActive = false;
+  }
+
+  if (gameCanvasEl) {
+    gameCanvasEl.addEventListener('mousemove', onMouseMove);
+    gameCanvasEl.addEventListener('mousedown', onMouseDown);
+  }
+  window.addEventListener('mouseup', onMouseUp);
+
+  // 鼠标离开窗口 / 窗口失焦：清除跟随锁定
+  function onWindowLeave() {
+    state.mouseActive = false;
+  }
+  window.addEventListener('mouseleave', onWindowLeave);
+  window.addEventListener('blur', onWindowLeave);
+
+  /* ---------- 触控预留（平板 WebView 接入点） ---------- */
+  // 后续实现滑动转向：touchstart 记录起点、touchmove 实时换算目标格、
+  // touchend 计算滑动方向，经 setDirection / steerByMouse 写入 nextDir。
+  function handleTouchStart(e) { /* 平板 WebView 接入点：预留 */ }
+  function handleTouchMove(e) { /* 平板 WebView 接入点：预留 */ }
+  function handleTouchEnd(e) { /* 平板 WebView 接入点：预留 */ }
+
+  /* ---------- 自适应缩放：棋盘按 min(视口宽, 高-预留) 等比缩放并封顶 ---------- */
+  // #gameCanvas 与 #bgCanvas 同步内部分辨率：× devicePixelRatio 后取整到 GRID_SIZE
+  // 整数倍（每格整数设备像素，清晰度最佳）；显示尺寸由 .board-wrap 宽度控制（CSS 像素）。
+  function applyResponsiveLayout() {
+    var wrap = document.querySelector('.board-wrap');
+    if (!wrap) return;
+    var boardCss = computeBoardSize(window.innerWidth, window.innerHeight, LAYOUT_RESERVED_H);
+    wrap.style.width = boardCss + 'px';
+    var dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+    var canvasPx = Math.max(1, Math.round(boardCss * dpr / GRID_SIZE) * GRID_SIZE);
+    var bgCanvasEl = document.getElementById('bgCanvas');
+    var sizeChanged = false;
+    if (bgCanvasEl && (bgCanvasEl.width !== canvasPx || bgCanvasEl.height !== canvasPx)) {
+      bgCanvasEl.width = canvasPx;
+      bgCanvasEl.height = canvasPx;
+      sizeChanged = true;
+    }
+    if (gameCanvasEl && (gameCanvasEl.width !== canvasPx || gameCanvasEl.height !== canvasPx)) {
+      gameCanvasEl.width = canvasPx;
+      gameCanvasEl.height = canvasPx;
+      sizeChanged = true;
+    }
+    // 重设 canvas 尺寸会清空位图，必须立即同步补画
+    if (sizeChanged) {
+      renderGame();
+      if (bgEngine) bgEngine.applySettings(settings); // 尺寸变化：引擎按新尺寸重建几何
+    }
+  }
+
+  // resize 用 rAF 节流：合并连续事件，下一帧统一应用最终尺寸
+  var layoutRafId = null;
+  function scheduleResponsiveLayout() {
+    if (layoutRafId !== null) return;
+    layoutRafId = requestAnimationFrame(function () {
+      layoutRafId = null;
+      applyResponsiveLayout();
+    });
+  }
+  window.addEventListener('resize', scheduleResponsiveLayout);
+  window.addEventListener('orientationchange', scheduleResponsiveLayout);
+  applyResponsiveLayout(); // 启动时按当前视口重算一次
+
+  /* ---------- 暴露给 App 层（index.html 内联脚本） ---------- */
+  window.SnakeGame.start = startGame;
+  window.SnakeGame.backToMenu = backToMenu;
+  window.SnakeGame.restartGame = restartGame;
+  window.SnakeGame.bindSettingsUI = bindSettingsUI;
+  window.SnakeGame.openSettingsDrawer = openSettingsDrawer;
+  window.SnakeGame.closeSettingsDrawer = closeSettingsDrawer;
+  window.SnakeGame.getSettings = function () { return settings; };
+  window.SnakeGame.saveSettings = saveSettings;
+  window.SnakeGame.applyBgSettings = applyBgSettings;
+  window.SnakeGame.openGameMenu = openGameMenu;
+  window.SnakeGame.closeGameMenu = closeGameMenu;
+  window.SnakeGame.highScore = { read: readHighScore, write: writeHighScore };
+}
+
 })();
