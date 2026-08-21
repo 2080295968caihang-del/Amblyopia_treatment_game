@@ -569,7 +569,8 @@ function buildBgGeom(modeIndex, seed, w, h) {
   return geom;
 }
 
-// 全屏红/黑：按 flickerHz 的 sin 波占空交替；闪烁关闭时整屏红色静止
+// 全屏红/黑：按 flickerHz 的 sin 波占空交替；闪烁关闭时整屏红色静止。
+// 该模式固定使用红/黑高对比色，忽略配色组——此模式下配色轮换不可见，属合理取舍。
 function drawRedFlicker(ctx, t, cfg) {
   const w = cfg.w;
   const h = cfg.h;
@@ -1298,6 +1299,45 @@ function runSelfTests() {
     check('jitterHz: 0.95Hz 档位抖动也在区间内', ok, '超出区间');
   }
 
+
+  // ---- 背景刺激层：mulberry32 / buildBgGeom（Task 4 审查补充）----
+  {
+    const r1 = mulberry32(42);
+    const r2 = mulberry32(42);
+    const r3 = mulberry32(7);
+    let sameSeq = true;
+    let diffSeq = false;
+    for (let i = 0; i < 8; i++) {
+      const a = r1();
+      const b = r2();
+      const c = r3();
+      if (a !== b) sameSeq = false;
+      if (a !== c) diffSeq = true;
+    }
+    check('mulberry32: 同种子序列一致且异种子序列不同', sameSeq && diffSeq, 'same=' + sameSeq + ' diff=' + diffSeq);
+  }
+  {
+    const g1 = buildBgGeom(3, 12345, 600, 400);
+    const g2 = buildBgGeom(3, 12345, 600, 400);
+    const g3 = buildBgGeom(3, 54321, 600, 400);
+    check('buildBgGeom: 同种子同参数几何一致', JSON.stringify(g1) === JSON.stringify(g2), '几何不一致');
+    check('buildBgGeom: 不同种子几何不同', JSON.stringify(g1) !== JSON.stringify(g3), '几何相同');
+  }
+  {
+    const g = buildBgGeom(1, 12345, 600, 400);
+    const dirOk = g.direction === 'horizontal' || g.direction === 'vertical' || g.direction === 'diagonal';
+    check('buildBgGeom: cam_grating 条宽在 40-80px', g.width >= 40 && g.width <= 80, '实际 ' + g.width);
+    check('buildBgGeom: 条纹方向枚举合法', dirOk, '实际 ' + g.direction);
+  }
+  {
+    const g = buildBgGeom(3, 2024, 300, 200);
+    let radiusOk = g.items.length > 0;
+    for (let i = 0; i < g.items.length && radiusOk; i++) {
+      if (g.items[i].r < 8 || g.items[i].r > 16) radiusOk = false;
+    }
+    check('buildBgGeom: 圆点半径在 8-16px', radiusOk, '存在越界半径');
+  }
+
   return results;
 }
 
@@ -1354,7 +1394,6 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   let bgRotateAt = 0;               // 下次模式/配色轮换时刻（ms）
   let bgAccentAt = 0;               // 混合模式下次点缀时刻（ms）
   let bgFlickerHz = jitterHz(flickerHzForLevel(settings.flickerLevel)); // 当前闪烁频率（Hz）
-  let bgFreezeT = null;             // 闪烁关闭时的冻结相位（秒）：保留最后一帧
   let bgPauseStart = null;          // 进入暂停的时间戳（恢复时扣除暂停时长）
   let bgSeed = 0;                   // 当前模式图案几何种子
   let bgGeom = null;                // 当前模式预生成几何（种子随机，避免逐帧抖动）
@@ -1398,8 +1437,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
 
   // 背景初始化（首次开始游戏时）：随机首模式与配色
   function initBg(now) {
-    bgModeIndex = pickNextMode(-1, settings.modes);
-    if (bgModeIndex < 0) bgModeIndex = 0; // 全部未勾选时退回红光闪烁
+    bgModeIndex = pickNextMode(-1, settings.modes); // 全部未勾选时为 -1，走纯背景色填充
     bgPaletteIndex = pickColorPalette(-1);
     bgRotateAt = now + randRange(BG_ROTATE_MIN_MS, BG_ROTATE_MAX_MS);
     newBgPattern(now);
@@ -1423,16 +1461,22 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     bgAccentAt = now + randRange(BG_ACCENT_MIN_MS, BG_ACCENT_MAX_MS);
   }
 
-  // 每帧渲染：顺序 = 模式图案 → 混合点缀 → 闪烁叠加
+  // 每帧渲染：顺序 = 模式图案 → 混合点缀 → 闪烁叠加。
+  // 全部模式未勾选（bgModeIndex=-1）时走纯背景色填充路径，配色轮换仍生效。
   function drawBgFrame(ctx, t) {
-    ensureBgGeom();
+    if (bgModeIndex < 0) {
+      // 无可用模式：用当前配色背景色填充全屏，不做图案/点缀/闪烁叠加
+      ctx.fillStyle = COLOR_PALETTES[bgPaletteIndex].bg;
+      ctx.fillRect(0, 0, bgCanvasEl.width, bgCanvasEl.height);
+      return;
+    }
+    ensureBgGeom(); // 先构建几何再组装 cfg，避免 cfg.geom 拿到 null
     const cfg = {
       w: bgCanvasEl.width,
       h: bgCanvasEl.height,
       t: t,
       palette: COLOR_PALETTES[bgPaletteIndex],
       geom: bgGeom,
-      accents: bgAccents,
       flickerHz: bgFlickerHz,
       flicker: settings.flickerChange
     };
@@ -1450,7 +1494,9 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     if (settings.flickerChange && bgModeIndex !== 0) drawFlickerOverlay(ctx, t, cfg);
   }
 
-  // 背景渲染循环：独立 rAF；尺寸与窗口同步；暂停/结束/隐藏时停止并保留当前帧
+  // 背景渲染循环：独立 rAF；尺寸与窗口同步；暂停/结束/隐藏时停止并保留当前帧。
+  // 闪烁开关只由 drawBgFrame 决定是否叠加闪烁层（red_flicker 模式自带闪烁），
+  // 不冻结图案漂移与配色轮换，保证"颜色/形状/闪烁"三开关语义相互独立。
   function bgLoop(timestamp) {
     const screenHidden = document.getElementById('gameScreen').classList.contains('hidden');
     if (screenHidden || !state.running || state.gameOver) {
@@ -1471,14 +1517,6 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
       bgGeomDirty = true; // 尺寸变化：按同一种子重建几何
     }
     const ctx = bgCanvasEl.getContext('2d');
-    // 闪烁关闭：冻结相位并跳过轮换/点缀，背景完全静止
-    if (!settings.flickerChange) {
-      if (bgFreezeT === null) bgFreezeT = (timestamp - bgModeT0) / 1000;
-      drawBgFrame(ctx, bgFreezeT);
-      bgAnimId = requestAnimationFrame(bgLoop);
-      return;
-    }
-    bgFreezeT = null;
     // 每 20-40s 轮换模式/配色；混合模式每 5-8s 穿插彩色点缀
     if (timestamp >= bgRotateAt) rotateBgPattern(timestamp);
     if (settings.colorMode === 'mixed' && timestamp >= bgAccentAt) addBgAccent(timestamp);
@@ -1486,12 +1524,16 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     bgAnimId = requestAnimationFrame(bgLoop);
   }
 
-  // 启动背景循环：已在运行时不重复启动；从暂停恢复时扣除暂停时长，图案相位不跳变
+  // 启动背景循环：已在运行时不重复启动；从暂停恢复时把暂停时长同时补偿到
+  // 相位起点与两个计划时间戳（轮换/点缀），避免恢复瞬间集中触发
   function startBgLoop() {
     if (!bgCanvasEl || bgAnimId !== null) return;
     if (!state.running || state.paused || state.gameOver) return;
     if (bgPauseStart !== null) {
-      bgModeT0 += (performance.now() - bgPauseStart); // 扣除暂停时间，图案接续暂停前位置
+      const pausedMs = performance.now() - bgPauseStart;
+      bgModeT0 += pausedMs;      // 图案相位接续暂停前位置
+      bgRotateAt += pausedMs;    // 轮换计划时间戳随暂停平移
+      bgAccentAt += pausedMs;    // 点缀计划时间戳随暂停平移
       bgPauseStart = null;
     }
     bgAnimId = requestAnimationFrame(bgLoop);
