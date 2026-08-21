@@ -448,7 +448,8 @@ function createInitialState() {
     foodsEaten: 0,
     running: false,
     paused: false,
-    gameOver: false
+    gameOver: false,
+    mouseActive: false
   };
 }
 
@@ -469,6 +470,58 @@ function setDirection(state, dir) {
   // 按 nextDir 判反向：一 tick 内先 up 再 down（相对待生效方向的 180° 反向）也应被拒绝
   if (!canSetDirection(state.nextDir || state.dir, dir)) return false;
   state.nextDir = dir;
+  return true;
+}
+
+/* ---------- 输入控制（键盘 / 鼠标，纯函数，Node 可测） ---------- */
+
+// 数值钳制到 [min, max]：用于把越界的鼠标坐标收敛回网格
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+// 键位映射：方向键 / WASD（大小写皆可）→ 方向；其他键返回 null
+function directionForKey(key) {
+  switch (key) {
+    case 'ArrowUp': case 'w': case 'W': return 'up';
+    case 'ArrowDown': case 's': case 'S': return 'down';
+    case 'ArrowLeft': case 'a': case 'A': return 'left';
+    case 'ArrowRight': case 'd': case 'D': return 'right';
+    default: return null;
+  }
+}
+
+// 鼠标转向：由蛇头到鼠标网格坐标的向量取主导轴方向（水平/垂直分量较大者），
+// 平局时优先水平；经 setDirection 语义写入 state.nextDir（禁止 180° 反向）。
+// 鼠标坐标越界时先钳制回网格；鼠标正落在蛇头上时无方向，返回 false。
+function steerByMouse(state, mouseCell) {
+  if (!mouseCell) return false;
+  const head = state.snake[0];
+  const dx = clamp(mouseCell.x, 0, GRID_SIZE - 1) - head.x;
+  const dy = clamp(mouseCell.y, 0, GRID_SIZE - 1) - head.y;
+  if (dx === 0 && dy === 0) return false;
+  let dir;
+  if (Math.abs(dx) >= Math.abs(dy)) dir = dx >= 0 ? 'right' : 'left';
+  else dir = dy >= 0 ? 'down' : 'up';
+  return setDirection(state, dir);
+}
+
+// 暂停切换：原地翻转 state.paused 并返回 state（供空格/P 与 HUD 暂停按钮复用）
+function togglePause(state) {
+  state.paused = !state.paused;
+  return state;
+}
+
+// 方向/暂停键统一入口：仅游戏运行中生效；未开始或 gameOver 后按键一律忽略并返回 false
+function handleGameKey(state, key) {
+  if (!state.running || state.gameOver) return false;
+  if (key === ' ' || key === 'p' || key === 'P') {
+    togglePause(state);
+    return true;
+  }
+  const dir = directionForKey(key);
+  if (dir === null) return false;
+  setDirection(state, dir); // 键盘可随时覆盖鼠标跟随
   return true;
 }
 
@@ -501,6 +554,7 @@ function stepGame(state, opts) {
       foodsEaten: ate ? state.foodsEaten + 1 : state.foodsEaten,
       running: state.running,
       paused: state.paused,
+      mouseActive: state.mouseActive,
       gameOver: hitWall || hitSelf
     },
     ate: ate,
@@ -707,6 +761,117 @@ function runSelfTests() {
     return JSON.stringify(s) === before;
   })(), '实际被修改');
 
+
+  // ---- 输入控制：directionForKey 键位映射（Task 3）----
+  check('directionForKey: ArrowUp → up', directionForKey('ArrowUp') === 'up', '实际 ' + directionForKey('ArrowUp'));
+  check('directionForKey: w / W → up', directionForKey('w') === 'up' && directionForKey('W') === 'up', '实际 ' + directionForKey('w') + ' / ' + directionForKey('W'));
+  check('directionForKey: ArrowDown → down', directionForKey('ArrowDown') === 'down', '实际 ' + directionForKey('ArrowDown'));
+  check('directionForKey: s / S → down', directionForKey('s') === 'down' && directionForKey('S') === 'down', '实际 ' + directionForKey('s') + ' / ' + directionForKey('S'));
+  check('directionForKey: ArrowLeft → left', directionForKey('ArrowLeft') === 'left', '实际 ' + directionForKey('ArrowLeft'));
+  check('directionForKey: a / A → left', directionForKey('a') === 'left' && directionForKey('A') === 'left', '实际 ' + directionForKey('a') + ' / ' + directionForKey('A'));
+  check('directionForKey: ArrowRight → right', directionForKey('ArrowRight') === 'right', '实际 ' + directionForKey('ArrowRight'));
+  check('directionForKey: d / D → right', directionForKey('d') === 'right' && directionForKey('D') === 'right', '实际 ' + directionForKey('d') + ' / ' + directionForKey('D'));
+  check('directionForKey: 无效键返回 null', directionForKey('x') === null && directionForKey('Enter') === null && directionForKey('') === null, '实际 ' + JSON.stringify(directionForKey('x')));
+
+  // ---- 输入控制：steerByMouse 主导轴转向（Task 3）----
+  {
+    const s = createInitialState(); // 蛇头 (10,10)，初始 dir=right
+    const ok = steerByMouse(s, { x: 15, y: 10 });
+    check('steerByMouse: 鼠标在蛇头右侧 → right', ok === true && s.nextDir === 'right', '实际 ok=' + ok + ' nextDir=' + s.nextDir);
+  }
+  {
+    const s = createInitialState();
+    const ok = steerByMouse(s, { x: 10, y: 3 });
+    check('steerByMouse: 鼠标在蛇头上方 → up', ok === true && s.nextDir === 'up', '实际 ok=' + ok + ' nextDir=' + s.nextDir);
+  }
+  {
+    const s = createInitialState();
+    const ok = steerByMouse(s, { x: 11, y: 15 }); // dx=1, dy=5：垂直分量主导
+    check('steerByMouse: 垂直分量主导 → down', ok === true && s.nextDir === 'down', '实际 ok=' + ok + ' nextDir=' + s.nextDir);
+  }
+  {
+    const s = createInitialState();
+    const ok = steerByMouse(s, { x: 15, y: 11 }); // dx=5, dy=1：水平分量主导
+    check('steerByMouse: 水平分量主导 → right', ok === true && s.nextDir === 'right', '实际 ok=' + ok + ' nextDir=' + s.nextDir);
+  }
+  {
+    const s = createInitialState();
+    const ok = steerByMouse(s, { x: 12, y: 12 }); // dx=2, dy=2 平局 → 水平优先
+    check('steerByMouse: 平局时水平优先 → right', ok === true && s.nextDir === 'right', '实际 ok=' + ok + ' nextDir=' + s.nextDir);
+  }
+  {
+    const s = createInitialState();
+    s.dir = 'right'; s.nextDir = 'right';
+    const ok = steerByMouse(s, { x: 5, y: 10 }); // 鼠标在左侧：相对当前方向 180° 反向
+    check('steerByMouse: 180° 反向被拒绝且 nextDir 不变', ok === false && s.nextDir === 'right', '实际 ok=' + ok + ' nextDir=' + s.nextDir);
+  }
+  {
+    const s = createInitialState();
+    const ok = steerByMouse(s, { x: 10, y: 10 }); // 鼠标正落在蛇头上
+    check('steerByMouse: 鼠标在蛇头上不产生方向', ok === false && s.nextDir === 'right', '实际 ok=' + ok + ' nextDir=' + s.nextDir);
+  }
+  {
+    const s = createInitialState();
+    s.dir = 'down'; s.nextDir = 'down';
+    const ok = steerByMouse(s, { x: -5, y: 10 }); // 鼠标越界：钳制到 (0,10) → left
+    check('steerByMouse: 越界鼠标坐标先钳制回网格', ok === true && s.nextDir === 'left', '实际 ok=' + ok + ' nextDir=' + s.nextDir);
+  }
+  {
+    const s = createInitialState();
+    const ok = steerByMouse(s, null); // 尚无鼠标数据
+    check('steerByMouse: 无鼠标数据返回 false 且不改方向', ok === false && s.nextDir === 'right', '实际 ok=' + ok + ' nextDir=' + s.nextDir);
+  }
+
+  // ---- 输入控制：togglePause 暂停往返（Task 3）----
+  {
+    const s = createInitialState(); // paused=false
+    const r1 = togglePause(s);
+    const p1 = s.paused;
+    const r2 = togglePause(s);
+    const p2 = s.paused;
+    check('togglePause: 暂停 → 恢复（往返不变）', p1 === true && p2 === false, '实际 ' + p1 + ' → ' + p2);
+    check('togglePause: 原地修改并返回同一 state', r1 === s && r2 === s, '实际返回了不同对象');
+  }
+
+  // ---- 输入控制：handleGameKey 运行态守卫（Task 3）----
+  {
+    const s = createInitialState(); // running=false：未开始
+    const before = JSON.stringify(s);
+    const ok = handleGameKey(s, 'ArrowUp');
+    check('handleGameKey: 未运行时方向键不生效', ok === false && JSON.stringify(s) === before, '实际 ok=' + ok);
+  }
+  {
+    const s = createInitialState();
+    s.running = true; s.gameOver = true; // gameOver 后
+    const before = JSON.stringify(s);
+    const ok = handleGameKey(s, 'ArrowUp');
+    check('handleGameKey: gameOver 后方向键不生效', ok === false && JSON.stringify(s) === before, '实际 ok=' + ok);
+  }
+  {
+    const s = createInitialState();
+    s.running = true; s.gameOver = true;
+    const ok = handleGameKey(s, ' ');
+    check('handleGameKey: gameOver 后空格不暂停', ok === false && s.paused === false, '实际 ok=' + ok + ' paused=' + s.paused);
+  }
+  {
+    const s = createInitialState();
+    s.running = true;
+    const ok = handleGameKey(s, 'ArrowUp');
+    check('handleGameKey: 运行中方向键生效', ok === true && s.nextDir === 'up', '实际 ok=' + ok + ' nextDir=' + s.nextDir);
+  }
+  {
+    const s = createInitialState();
+    s.running = true;
+    const ok = handleGameKey(s, 'P');
+    check('handleGameKey: 运行中 P 切换暂停', ok === true && s.paused === true, '实际 ok=' + ok + ' paused=' + s.paused);
+  }
+  {
+    const s = createInitialState();
+    s.running = true;
+    const before = JSON.stringify(s);
+    const ok = handleGameKey(s, 'Enter');
+    check('handleGameKey: 无效键返回 false 且不改状态', ok === false && JSON.stringify(s) === before, '实际 ok=' + ok);
+  }
   return results;
 }
 
@@ -751,6 +916,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   let animationId = null;             // rAF 句柄
   let lastFrameTs = null;             // 上一帧时间戳（用于时间累积）
   let accMs = 0;                      // 距下一次移动累积的毫秒数
+  let lastMouseCell = null;           // 鼠标在游戏屏上的最近目标格（Task 3，每 tick 用于鼠标跟随）
 
   // 读取最高分（localStorage 缺失、非法或读取异常时返回 0）
   function readHighScore() {
@@ -817,6 +983,11 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
 
   // 每 tick 走一步：只更新逻辑与 HUD，渲染统一在帧末进行
   function tick() {
+
+    // 鼠标跟随：每 tick 由蛇头到鼠标的向量取主导轴方向（键盘仍可随时覆盖）
+    if (state.mouseActive && lastMouseCell) {
+      steerByMouse(state, lastMouseCell);
+    }
     const result = stepGame(state);
     state = result.state;
     if (result.ate) {
@@ -893,6 +1064,57 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   // 结束浮层“再玩一次”
   const btnRestart = document.getElementById('btnRestart');
   if (btnRestart) btnRestart.addEventListener('click', startGame);
+
+  // ---- 输入控制：键盘（方向键 / WASD + 空格、P 暂停）----
+  function onKeyDown(e) {
+    if (!state.running || state.gameOver) return; // 未开始 / 已结束：按键不生效
+    if (handleGameKey(state, e.key)) e.preventDefault(); // 命中方向或暂停键时阻止默认行为（滚动/聚焦）
+  }
+  window.addEventListener('keydown', onKeyDown);
+
+  // ---- 输入控制：鼠标 ----
+  const gameCanvasEl = document.getElementById('gameCanvas');
+
+  // 把鼠标事件坐标换算为网格坐标（相对 #gameCanvas，按实际显示尺寸等比换算）
+  function canvasMouseToCell(e) {
+    const rect = gameCanvasEl.getBoundingClientRect();
+    const x = Math.floor(((e.clientX - rect.left) / rect.width) * GRID_SIZE);
+    const y = Math.floor(((e.clientY - rect.top) / rect.height) * GRID_SIZE);
+    return { x: x, y: y };
+  }
+
+  // 鼠标在游戏屏移动：记录目标格并启用鼠标跟随（每 tick 由 steerByMouse 转向）
+  function onMouseMove(e) {
+    lastMouseCell = canvasMouseToCell(e);
+    state.mouseActive = true;
+  }
+
+  // 按住左键：锁定跟随（鼠标不动也持续朝目标格转向）
+  function onMouseDown(e) {
+    if (e.button === 0) {
+      lastMouseCell = canvasMouseToCell(e);
+      state.mouseActive = true;
+    }
+  }
+
+  // 松开左键：恢复键盘优先（绑定到 window，避免在画布外松开时残留锁定）
+  function onMouseUp(e) {
+    if (e.button === 0) state.mouseActive = false;
+  }
+
+  if (gameCanvasEl) {
+    gameCanvasEl.addEventListener('mousemove', onMouseMove);
+    gameCanvasEl.addEventListener('mousedown', onMouseDown);
+  }
+  window.addEventListener('mouseup', onMouseUp);
+
+  // ---- 触控预留（平板 WebView 接入点）----
+  // 后续实现滑动转向：touchstart 记录起点、touchmove 实时换算目标格、
+  // touchend 计算滑动方向，经 setDirection / steerByMouse 写入 nextDir。
+  function handleTouchStart(e) { /* 平板 WebView 接入点：预留 */ }
+  function handleTouchMove(e) { /* 平板 WebView 接入点：预留 */ }
+  function handleTouchEnd(e) { /* 平板 WebView 接入点：预留 */ }
+
   if (new URLSearchParams(window.location.search).has('test')) {
     const selfTestResults = runSelfTests();
     logSelfTestResults(selfTestResults);
