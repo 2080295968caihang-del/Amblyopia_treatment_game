@@ -473,7 +473,7 @@ function setDirection(state, dir) {
   return true;
 }
 
-/* ---------- 输入控制（键盘 / 鼠标，纯函数，Node 可测） ---------- */
+/* ---------- 输入控制（键盘 / 鼠标，Node 可测；directionForKey 为纯函数，其余原地修改型） ---------- */
 
 // 数值钳制到 [min, max]：用于把越界的鼠标坐标收敛回网格
 function clamp(value, min, max) {
@@ -514,6 +514,7 @@ function togglePause(state) {
 
 // 方向/暂停键统一入口：仅游戏运行中生效；未开始或 gameOver 后按键一律忽略并返回 false。
 // 方向键成功写入时复位 mouseActive：键盘接管、鼠标跟随暂停，下次移动鼠标再恢复。
+// 返回值：true 表示已消费该输入（含被 180° 反向拒绝的方向键），并非方向必然生效。
 function handleGameKey(state, key) {
   if (!state.running || state.gameOver) return false;
   if (key === ' ' || key === 'p' || key === 'P') {
@@ -1073,6 +1074,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     document.getElementById('endOverlay').classList.add('hidden');
     accMs = 0;
     lastFrameTs = null;
+    lastMouseCell = null; // 跨局清除鼠标目标格，避免残留跟随
     updateHud();
     renderGame();
     cancelAnimationFrame(animationId);
@@ -1091,6 +1093,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
 
   // ---- 输入控制：键盘（方向键 / WASD + 空格、P 暂停）----
   function onKeyDown(e) {
+    if (e.repeat) return; // 长按重复触发（约 30Hz）跳过，避免空格/P 快速抖动暂停
     if (!state.running || state.gameOver) return; // 未开始 / 已结束：按键不生效
     if (handleGameKey(state, e.key)) e.preventDefault(); // 命中方向或暂停键时阻止默认行为（滚动/聚焦）
   }
@@ -1131,10 +1134,17 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     gameCanvasEl.addEventListener('mousedown', onMouseDown);
   }
   window.addEventListener('mouseup', onMouseUp);
+  // 鼠标离开窗口 / 窗口失焦：清除跟随锁定，避免在窗口外松开鼠标时 mouseActive 残留
+  function onWindowLeave() {
+    state.mouseActive = false;
+  }
+  window.addEventListener('mouseleave', onWindowLeave);
+  window.addEventListener('blur', onWindowLeave);
 
   // ---- 触控预留（平板 WebView 接入点）----
   // 后续实现滑动转向：touchstart 记录起点、touchmove 实时换算目标格、
   // touchend 计算滑动方向，经 setDirection / steerByMouse 写入 nextDir。
+  // 填充实现时需将三个处理器 addEventListener 绑定到 #gameCanvas，并 e.preventDefault() 抑制合成鼠标事件。
   function handleTouchStart(e) { /* 平板 WebView 接入点：预留 */ }
   function handleTouchMove(e) { /* 平板 WebView 接入点：预留 */ }
   function handleTouchEnd(e) { /* 平板 WebView 接入点：预留 */ }
