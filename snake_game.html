@@ -574,14 +574,14 @@ function shouldPlaySound(settingsObj) {
 // 懒创建的共享 AudioContext（浏览器自动播放策略：首次用户交互时创建/恢复）
 let audioCtx = null;
 
-// 获取/创建并恢复 AudioContext；无头环境（Node / 不支持 Web Audio）返回 null，静默跳过
+// 获取/创建并恢复 AudioContext；无 window 或浏览器不支持 Web Audio 时返回 null，静默跳过
 function ensureAudioContext() {
   if (typeof window === 'undefined') return null;
   const AC = window.AudioContext || window.webkitAudioContext;
   if (typeof AC === 'undefined') return null;
   try {
     if (!audioCtx) audioCtx = new AC();
-    if (audioCtx.state === 'suspended') audioCtx.resume();
+    if (audioCtx.state === 'suspended') audioCtx.resume().catch(function () { /* 静默忽略 */ });
     return audioCtx;
   } catch (e) {
     return null; // 音频设备不可用等异常：静默忽略，不影响游戏
@@ -609,6 +609,7 @@ function playTone(freq, duration, type, volume, endFreq) {
     }
     osc.connect(gain);
     gain.connect(ctx.destination);
+    osc.onended = function () { osc.disconnect(); gain.disconnect(); }; // 播放结束释放节点
     osc.start(t0);
     osc.stop(t0 + duration + 0.02);
   } catch (e) {
@@ -1976,7 +1977,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
 
   // 开始 / 再玩一次：重置状态并启动主循环
   function startGame() {
-    ensureAudioContext(); // 首次用户交互：创建/恢复 AudioContext（浏览器自动播放策略）
+    if (shouldPlaySound(settings)) ensureAudioContext(); // 音效开启才解锁音频（静音时懒创建）；首次用户交互满足自动播放策略
     state = createInitialState();
     state.food = randomFoodCell(state.snake);
     state.running = true;
