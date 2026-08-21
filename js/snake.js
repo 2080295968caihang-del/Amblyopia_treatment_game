@@ -20,8 +20,8 @@
     left: { x: -1, y: 0 },
     right: { x: 1, y: 0 }
   };
-  var LAYOUT_RESERVED_H = 140;         // HUD + 常驻遮眼提示 + 边距预留高度（CSS 像素）
-  var MAX_BOARD_CSS = 720;             // 棋盘最大边长上限（CSS 像素）
+  var LAYOUT_RESERVED_H = 150;         // HUD + 常驻遮眼提示 + 边距预留高度（CSS 像素）
+  var MAX_BOARD_CSS = 640;             // 棋盘最大边长上限（CSS 像素）
 
   /* ---------- 核心纯函数 ---------- */
 
@@ -184,7 +184,8 @@
   // 方向/暂停键统一入口：仅游戏运行中生效；未开始或 gameOver 后按键一律忽略并返回 false。
   // 方向键成功写入时复位 mouseActive：键盘接管、鼠标跟随暂停，下次移动鼠标再恢复。
   // 返回值：true 表示已消费该输入（含被 180° 反向拒绝的方向键），并非方向必然生效。
-  function handleGameKey(state, key) {
+  // controlMode='mouse' 时方向键仅消费不转向（暂停/菜单键仍生效），避免鼠标操控下误触
+  function handleGameKey(state, key, controlMode) {
     if (!state.running || state.gameOver) return false;
     if (key === ' ' || key === 'p' || key === 'P') {
       togglePause(state); // 暂停键不干预鼠标跟随状态（恢复后延续当前控制方式）
@@ -192,6 +193,7 @@
     }
     var dir = directionForKey(key);
     if (dir === null) return false;
+    if (controlMode === 'mouse') return true; // 鼠标操控：方向键无效
     var applied = setDirection(state, dir);
     if (applied) state.mouseActive = false; // 键盘方向键接管：复位鼠标跟随
     return true;
@@ -580,6 +582,18 @@
       var okk3 = handleGameKey(k3, 'ArrowLeft'); // 180° 反向被拒
       check('handleGameKey: 反向键被拒时保留鼠标跟随（仅成功时接管）', okk3 === true && k3.nextDir === 'right' && k3.mouseActive === true, '实际 ok=' + okk3 + ' nextDir=' + k3.nextDir + ' mouseActive=' + k3.mouseActive);
     }
+    {
+      var m1 = createInitialState();
+      m1.running = true;
+      var okm1 = handleGameKey(m1, 'ArrowUp', 'mouse');
+      check('handleGameKey: 鼠标操控模式方向键不转向', okm1 === true && m1.nextDir === 'right', '实际 ok=' + okm1 + ' nextDir=' + m1.nextDir);
+    }
+    {
+      var m2 = createInitialState();
+      m2.running = true;
+      var okm2 = handleGameKey(m2, ' ', 'mouse');
+      check('handleGameKey: 鼠标操控模式暂停键仍生效', okm2 === true && m2.paused === true, '实际 ok=' + okm2);
+    }
 
     // ---- 起始速度 / 速度档（家长设置关联） ----
     check('initialSpeedMs: 1–5 档映射', (function () {
@@ -653,12 +667,13 @@
 
 ﻿/* ---------- 浏览器端初始化（Node 下自动跳过） ---------- */
 if (typeof window !== 'undefined' && typeof document !== 'undefined') {
-  /* ---------- 设置持久化（localStorage，v1.0 键名与 6→4 模式兼容） ---------- */
+  /* ---------- 设置持久化（localStorage，v1.0 键名与 6→3 模式兼容） ---------- */
   var SETTINGS_KEY = 'amblyopia_snake_settings_v1';
   var HIGH_SCORE_KEY = 'amblyopia_snake_highscore_v1';
   var defaultSettings = {
     flickerLevel: 1,                  // 0/1/2 → 1.2/2/3.2 Hz
-    modes: [true, true, true, true],  // 4 种模式是否参与轮换
+    modes: [true, true, true],        // 3 种模式是否参与轮换
+    controlMode: 'both',              // 'keyboard' 键盘 | 'mouse' 鼠标 | 'both' 两者均可
     colorMode: 'contrast',            // 'contrast' 高对比 | 'mixed' 混合（带彩色点缀）
     startSpeed: 2,                    // 起始速度档 1–5 → initialSpeedMs
     soundOn: true,                    // 音效开关
@@ -668,11 +683,12 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   };
 
   // 从 localStorage 读取设置：解析失败或字段缺失时用默认值补齐。
-  // v1.0 的 modes 为 6 项，加载时映射为新 4 项（取旧索引 0,1,2,4）。
+  // v1.0 的 modes 为 6 项、v2.0 为 4 项，加载时映射为新 3 项（均丢弃红光闪烁位）。
   function loadSettings() {
     var out = {
       flickerLevel: defaultSettings.flickerLevel,
       modes: defaultSettings.modes.slice(),
+      controlMode: defaultSettings.controlMode,
       colorMode: defaultSettings.colorMode,
       startSpeed: defaultSettings.startSpeed,
       soundOn: defaultSettings.soundOn,
@@ -692,13 +708,18 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
           }
           if (Array.isArray(saved.modes)) {
             if (saved.modes.length === 6) {
-              out.modes = [saved.modes[0] === true, saved.modes[1] === true, saved.modes[2] === true, saved.modes[4] === true];
+              // v1.0：6 项（旧索引 0..5）→ 新 3 项：CAM光栅=旧1、棋盘格=旧2、对比条纹=旧4
+              out.modes = [saved.modes[1] === true, saved.modes[2] === true, saved.modes[4] === true];
+            } else if (saved.modes.length === 4) {
+              // v2.0：4 项（含红光闪烁）→ 新 3 项：丢弃旧索引 0
+              out.modes = [saved.modes[1] === true, saved.modes[2] === true, saved.modes[3] === true];
             } else {
               for (var i = 0; i < out.modes.length; i++) {
                 if (i < saved.modes.length) out.modes[i] = saved.modes[i] === true;
               }
             }
           }
+          if (saved.controlMode === 'keyboard' || saved.controlMode === 'mouse' || saved.controlMode === 'both') out.controlMode = saved.controlMode;
           if (saved.colorMode === 'contrast' || saved.colorMode === 'mixed') out.colorMode = saved.colorMode;
           if (Number.isFinite(saved.startSpeed)) {
             var sp = Math.floor(saved.startSpeed);
@@ -1126,7 +1147,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
 
   // 模式勾选循环：按 BgEngine.MODE_IDS 索引写入 settings.modes
   var modeBoxes = document.querySelectorAll('input[name="mode"]');
-  var MODE_IDS = (window.BgEngine && window.BgEngine.MODE_IDS) || ['red_flicker', 'cam_grating', 'checkerboard', 'stripes'];
+  var MODE_IDS = (window.BgEngine && window.BgEngine.MODE_IDS) || ['cam_grating', 'checkerboard', 'stripes'];
   for (var mi = 0; mi < modeBoxes.length; mi++) {
     (function (box) {
       var idx = MODE_IDS.indexOf(box.value);
@@ -1192,6 +1213,8 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     bindRadios('colorMode', function (v) { settings.colorMode = v; });
     backfillRadio('startSpeed', settings.startSpeed);
     bindRadios('startSpeed', function (v) { settings.startSpeed = Number(v); });
+    backfillRadio('controlMode', settings.controlMode);
+    bindRadios('controlMode', function (v) { settings.controlMode = v; });
     var btnOpenSettings = document.getElementById('btnOpenSettings');
     if (btnOpenSettings) btnOpenSettings.addEventListener('click', openSettingsDrawer);
     var btnDrawerClose = document.getElementById('btnDrawerClose');
@@ -1229,7 +1252,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
       e.preventDefault();
       return;
     }
-    if (handleGameKey(state, e.key)) {
+    if (handleGameKey(state, e.key, settings.controlMode)) {
       if (e.key === ' ' || e.key === 'p' || e.key === 'P') {
         syncPauseButton();
         // 与 Esc 菜单共用暂停语义：暂停时打开菜单，恢复时关闭
@@ -1255,12 +1278,12 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   // 鼠标在游戏屏移动：记录目标格并启用鼠标跟随
   function onMouseMove(e) {
     lastMouseCell = canvasMouseToCell(e);
-    state.mouseActive = true;
+    if (settings.controlMode !== 'keyboard') state.mouseActive = true;
   }
 
   // 按住左键：锁定跟随（鼠标不动也持续朝目标格转向）
   function onMouseDown(e) {
-    if (e.button === 0) {
+    if (e.button === 0 && settings.controlMode !== 'keyboard') {
       lastMouseCell = canvasMouseToCell(e);
       state.mouseActive = true;
     }

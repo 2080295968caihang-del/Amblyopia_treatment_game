@@ -1,6 +1,6 @@
 ﻿/* =========================================================
    js/bg-engine.js · 共享背景刺激引擎（游戏无关）
-   4 模式 / 15s 切换 / 1s 交叉淡化 / 5-8s 配色 / 1.2·2·3.2Hz 闪烁
+   3 模式（已删红光闪烁）/ 15s 切换 / 1s 交叉淡化 / 5-8s 配色 / 1.2·2·3.2Hz 闪烁
    暴露全局 window.BgEngine（Node 下 window=globalThis 可无头自测）
    ========================================================= */
 (function () {
@@ -8,7 +8,7 @@
 
   /* ---------- 常量 ---------- */
   var GRID_UNUSED = 21; // 背景引擎不再依赖网格，仅为兼容保留
-  var MODE_IDS = ['red_flicker', 'cam_grating', 'checkerboard', 'stripes']; // 4 种，已删圆点/童趣图案
+  var MODE_IDS = ['cam_grating', 'checkerboard', 'stripes']; // 3 种，已删圆点/童趣图案与红光闪烁
   var FLICKER_LEVELS = [1.2, 2, 3.2];      // 慢/中/快 Hz（v2.0 加快）
   var BG_FLICKER_JITTER = 0.2;             // 闪烁频率 ±20% 抖动
   var BG_ROTATE_MS = 15000;                // 形状 15s 切换
@@ -23,17 +23,21 @@
 
   // 高对比配色组：{fg 图案前景, bg 背景}
   var COLOR_PALETTES = [
+    // 依据：弱视治疗刺激核心为“高对比度”而非特定颜色——
+    // 黑白条纹/棋盘格（CAM 光栅）有临床证据（PubMed 系统综述 37306731）；
+    // 近 640nm 红光对黄斑锥体刺激有文献支持（红+白组合保留）；
+    // 蓝黄为互补高对比组合，供轮换使用；避免大面积三原色堆叠刺激。
     { bg: '#000000', fg: '#ffffff' },
     { bg: '#ffffff', fg: '#000000' },
-    { bg: '#0000a8', fg: '#ffffff' },
-    { bg: '#003300', fg: '#ffff00' }
+    { bg: '#ffffff', fg: '#ff0000' },
+    { bg: '#0000a8', fg: '#ffd400' }
   ];
   // 混合模式（colorMode='mixed'）的彩色点缀颜色池
   var ACCENT_COLORS = ['#ff2d2d', '#ffd400', '#00e5ff', '#ff66ff', '#7cff00', '#ff9d00'];
 
   var DEFAULT_SETTINGS = {
     flickerLevel: 1,                  // 0/1/2 → 1.2/2/3.2 Hz
-    modes: [true, true, true, true],  // 4 种模式是否参与轮换
+    modes: [true, true, true],        // 3 种模式是否参与轮换
     colorMode: 'contrast',            // 'contrast' 高对比 | 'mixed' 混合（带彩色点缀）
     startSpeed: 2,                    // 起始速度档 1-5（游戏逻辑使用，引擎保留字段）
     soundOn: true,                    // 音效开关（游戏逻辑使用，引擎保留字段）
@@ -95,19 +99,19 @@
   // 依据模式索引与种子预生成图案几何（条纹方向/粗细、棋盘格大小）
   function buildBgGeom(modeIndex, seed, w, h) {
     var rnd = mulberry32(seed);
-    if (modeIndex === 1) {
+    if (modeIndex === 0) {
       // cam_grating：方向横/竖/斜随机，条宽 40-80px
       return { direction: ['horizontal', 'vertical', 'diagonal'][Math.floor(rnd() * 3)], width: 40 + Math.floor(rnd() * 41) };
     }
-    if (modeIndex === 2) {
+    if (modeIndex === 1) {
       // checkerboard：按 21 等分网格的棋盘格大小
       return { cell: Math.max(8, Math.round(Math.min(w, h) / 21)) };
     }
-    if (modeIndex === 3) {
+    if (modeIndex === 2) {
       // stripes：方向随机 + 条宽 40-100px
       return { direction: ['horizontal', 'vertical', 'diagonal'][Math.floor(rnd() * 3)], width: 40 + Math.floor(rnd() * 61) };
     }
-    return { none: true }; // red_flicker 无几何
+    return { none: true }; // 防御：未知模式索引
   }
 
   // 过渡系数：切换瞬间(now=switchAt)新图案=0，crossfadeMs 内线性过渡到新=1；
@@ -132,26 +136,10 @@
     };
     var t = now / 1000;
     switch (modeIndex) {
-      case 0: drawRedFlicker(ctx, t, cfg); break;
-      case 1: drawCamGrating(ctx, t, cfg); break;
-      case 2: drawCheckerboard(ctx, t, cfg); break;
-      case 3: drawStripes(ctx, t, cfg); break;
+      case 0: drawCamGrating(ctx, t, cfg); break;
+      case 1: drawCheckerboard(ctx, t, cfg); break;
+      case 2: drawStripes(ctx, t, cfg); break;
     }
-  }
-
-  // 全屏红/黑：按 flickerHz 的方波占空交替；闪烁关闭时整屏红色静止。
-  // 该模式固定使用红/黑高对比色，忽略配色组（配色轮换在此模式下不可见，属合理取舍）。
-  function drawRedFlicker(ctx, t, cfg) {
-    var w = cfg.w, h = cfg.h;
-    var period = 1000 / cfg.flickerHz / 1000; // 周期（秒）
-    var phase = (t % period) / period;
-    if (!cfg.flicker) {
-      ctx.fillStyle = '#ff0000';
-      ctx.fillRect(0, 0, w, h);
-      return;
-    }
-    ctx.fillStyle = phase < 0.5 ? '#ff0000' : '#000000';
-    ctx.fillRect(0, 0, w, h);
   }
 
   // 黑白方波条纹（CAM 光栅）：方向随机，条宽 40-80px，整体缓慢平移
@@ -161,18 +149,18 @@
     var width = geom.width;
     var period = width * 2;
     var offset = (t * BG_DRIFT_PX) % period;
-    var len = Math.hypot(w, h);
+    var diag = Math.ceil(Math.hypot(w, h)); // 对角全幅：旋转后需覆盖 ±diag/2 才不漏四角
     ctx.fillStyle = cfg.palette.bg;
     ctx.fillRect(0, 0, w, h);
     ctx.fillStyle = cfg.palette.fg;
     ctx.save();
     if (geom.direction === 'diagonal') { ctx.translate(w / 2, h / 2); ctx.rotate(Math.PI / 4); }
-    var limit = geom.direction === 'vertical' ? w : (geom.direction === 'horizontal' ? h : len);
-    var pos = -period + offset;
+    var limit = geom.direction === 'vertical' ? w : (geom.direction === 'horizontal' ? h : diag + width);
+    var pos = geom.direction === 'diagonal' ? -diag - width - period + offset : -period + offset;
     while (pos < limit) {
       if (geom.direction === 'vertical') ctx.fillRect(pos, 0, width, h);
       else if (geom.direction === 'horizontal') ctx.fillRect(0, pos, w, width);
-      else ctx.fillRect(-len, pos, len * 2, width);
+      else ctx.fillRect(-diag, pos, diag * 2, width);
       pos += period;
     }
     ctx.restore();
@@ -200,18 +188,18 @@
     var width = geom.width;
     var period = width * 2;
     var offset = (t * BG_DRIFT_PX) % period;
-    var len = Math.hypot(w, h);
+    var diag = Math.ceil(Math.hypot(w, h)); // 对角全幅：旋转后需覆盖 ±diag/2 才不漏四角
     ctx.fillStyle = cfg.palette.bg;
     ctx.fillRect(0, 0, w, h);
     ctx.fillStyle = cfg.palette.fg;
     ctx.save();
     if (geom.direction === 'diagonal') { ctx.translate(w / 2, h / 2); ctx.rotate(Math.PI / 4); }
-    var limit = geom.direction === 'vertical' ? w : (geom.direction === 'horizontal' ? h : len);
-    var pos = -period + offset;
+    var limit = geom.direction === 'vertical' ? w : (geom.direction === 'horizontal' ? h : diag + width);
+    var pos = geom.direction === 'diagonal' ? -diag - width - period + offset : -period + offset;
     while (pos < limit) {
       if (geom.direction === 'vertical') ctx.fillRect(pos, 0, width, h);
       else if (geom.direction === 'horizontal') ctx.fillRect(0, pos, w, width);
-      else ctx.fillRect(-len, pos, len * 2, width);
+      else ctx.fillRect(-diag, pos, diag * 2, width);
       pos += period;
     }
     ctx.restore();
@@ -331,10 +319,9 @@
       }
     }
 
-    // 全局闪烁叠加：方波明暗交替（比 v1.0 更明显）；red_flicker 自带闪烁，不叠加
+    // 全局闪烁叠加：方波明暗交替（比 v1.0 更明显）；三种图案均叠加同一闪烁层
     function drawFlickerOverlay(ctx, now) {
       if (!st.settings.flickerChange) return;
-      if (st.modeIndex === 0) return;
       var period = 1000 / st.flickerHz;
       var phase = (now % period) / period; // 0..1
       ctx.save();
@@ -425,41 +412,41 @@
   function runBgSelfTests() {
     var r = [];
     var check = function (name, ok) { r.push({ name: name, pass: !!ok }); };
-    check('MODE_IDS 为 4 项', MODE_IDS.join(',') === 'red_flicker,cam_grating,checkerboard,stripes');
+    check('MODE_IDS 为 3 项', MODE_IDS.join(',') === 'cam_grating,checkerboard,stripes');
     check('FLICKER_LEVELS 为 1.2/2/3.2', FLICKER_LEVELS.join(',') === '1.2,2,3.2');
     check('flickerHzForLevel 映射', flickerHzForLevel(0) === 1.2 && flickerHzForLevel(1) === 2 && flickerHzForLevel(2) === 3.2);
     check('flickerHzForLevel 越界回退', flickerHzForLevel(9) === 3.2);
     var j = 0;
     for (var i = 0; i < 200; i++) { var v = jitterHz(2); if (v >= 1.6 && v <= 2.4) j++; }
     check('jitterHz 200 次均在 ±20%', j === 200);
-    check('pickNextMode 无启用返回-1', pickNextMode(0, [false, false, false, false]) === -1);
-    check('pickNextMode 单模式', pickNextMode(0, [false, true, false, false]) === 1);
+    check('pickNextMode 无启用返回-1', pickNextMode(0, [false, false, false]) === -1);
+    check('pickNextMode 单模式', pickNextMode(0, [false, true, false]) === 1);
     var noRepeat = true;
     var p = 0;
-    for (var k = 0; k < 200; k++) { var n = pickNextMode(p, [true, true, true, true]); if (n === p || n < 0 || n > 3) noRepeat = false; p = n; }
+    for (var k = 0; k < 200; k++) { var n = pickNextMode(p, [true, true, true]); if (n === p || n < 0 || n > 2) noRepeat = false; p = n; }
     check('pickNextMode 200 次不重复且在范围内', noRepeat);
-    check('nextBgModeIndex 全关-1', nextBgModeIndex(0, [false, false, false, false]) === -1);
+    check('nextBgModeIndex 全关-1', nextBgModeIndex(0, [false, false, false]) === -1);
     check('transitionAlpha 过渡边界', transitionAlpha(100, 100, 15000, 1000) === 0 && transitionAlpha(1100, 100, 15000, 1000) === 1 && Math.abs(transitionAlpha(600, 100, 15000, 1000) - 0.5) < 1e-9);
-    check('buildBgGeom cam_grating 条宽范围', (function () { var g = buildBgGeom(1, 12345, 600, 600); return g.width >= 40 && g.width <= 80; })());
+    check('buildBgGeom cam_grating 条宽范围', (function () { var g = buildBgGeom(0, 12345, 600, 600); return g.width >= 40 && g.width <= 80; })());
     check('COLOR_PALETTES 4 组', COLOR_PALETTES.length === 4);
     var noRepeatPal = true;
     var pp = 0;
     for (var pi = 0; pi < 200; pi++) { var pn = pickColorPalette(pp); if (pn === pp || pn < 0 || pn >= COLOR_PALETTES.length) noRepeatPal = false; pp = pn; }
     check('pickColorPalette 200 次不重复且在范围内', noRepeatPal);
     check('nextBgModeIndex 从 -1 恢复有效模式', (function () {
-      var n = nextBgModeIndex(-1, [false, false, true, false]);
-      return n === 2;
+      var n = nextBgModeIndex(-1, [false, true, false]);
+      return n === 1;
     })());
     check('buildBgGeom stripes 方向/条宽合法', (function () {
       var ok = true;
       for (var si = 0; si < 50; si++) {
-        var g = buildBgGeom(3, (Math.random() * 1e9) >>> 0, 600, 600);
+        var g = buildBgGeom(2, (Math.random() * 1e9) >>> 0, 600, 600);
         if (['horizontal', 'vertical', 'diagonal'].indexOf(g.direction) === -1 || g.width < 40 || g.width > 100) ok = false;
       }
       return ok;
     })());
     check('buildBgGeom checkerboard 格数合理', (function () {
-      var g = buildBgGeom(2, 999, 600, 600);
+      var g = buildBgGeom(1, 999, 600, 600);
       return g.cell >= 8;
     })());
     return r;
