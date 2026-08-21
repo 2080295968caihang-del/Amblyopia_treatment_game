@@ -248,6 +248,16 @@ input[type="checkbox"] {
   accent-color: var(--color-accent);
   cursor: pointer;
 }
+.drawer-note {
+  margin-top: 4px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #cccccc;
+  background: #1a1a1a;
+  border: 1px solid #444444;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
 </style>
 </head>
 <body>
@@ -356,6 +366,8 @@ input[type="checkbox"] {
       <label><input type="checkbox" id="flickerChange" checked> 闪烁</label>
     </div>
   </fieldset>
+
+  <p class="drawer-note">建议每次 10–15 分钟、每天 1–2 次；请遵医嘱；训练时遮盖好眼</p>
 </aside>
 
 <script>
@@ -423,10 +435,20 @@ function randomFoodCell(snake) {
   return free[Math.floor(Math.random() * free.length)];
 }
 
-// 每吃 SPEED_STEP 个食物降一档速度（毫秒/格），最低不低于 SPEED_MIN_MS
-function speedForLevel(foodsEaten) {
+// 家长设置起始速度档（1–5）→ 毫秒/格：很慢→很快；越界回退默认起始速度
+function initialSpeedMs(startSpeed) {
+  const table = [220, 180, 140, 100, 60]; // 索引 = startSpeed - 1
+  const i = startSpeed - 1;
+  if (i < 0 || i >= table.length) return SPEED_START_MS;
+  return table[i];
+}
+
+// 每吃 SPEED_STEP 个食物降一档速度（毫秒/格），最低不低于 SPEED_MIN_MS。
+// baseMs 为起始速度：默认与旧行为一致，家长设置自定义起始速度时由主循环传入。
+function speedForLevel(foodsEaten, baseMs) {
+  if (baseMs === undefined) baseMs = SPEED_START_MS;
   const level = Math.floor(foodsEaten / SPEED_STEP);
-  return Math.max(SPEED_MIN_MS, SPEED_START_MS - level * SPEED_DELTA_MS);
+  return Math.max(SPEED_MIN_MS, baseMs - level * SPEED_DELTA_MS);
 }
 
 // 闪烁频率档位映射：0/1/2 → 0.95/1.4/2.4 Hz，越界时回退到最快档
@@ -462,16 +484,73 @@ const BG_DRIFT_PX = 60;           // 图案整体平移速度（约 1px/tick @60
 const BG_FLICKER_JITTER = 0.2;    // 闪烁频率 ±20% 抖动
 const ACCENT_MAX = 16;            // 混合模式点缀数量上限
 
-// 设置对象：Task 5 接入家长设置面板后由其改写，默认值与 defaultSettings 一致
-const settings = {
+// 家长设置：默认值、localStorage 存取（Task 5）。
+// 键与最高分（amblyopia_snake_highscore_v1）同款风格：单文件零依赖、解析失败静默回退。
+const SETTINGS_KEY = 'amblyopia_snake_settings_v1';
+const defaultSettings = {
   flickerLevel: 1,                  // 0/1/2 → 0.95/1.4/2.4 Hz
   modes: [true, true, true, true, true, true], // 6 种模式是否参与轮换
   colorMode: 'contrast',            // 'contrast' 高对比 | 'mixed' 混合（带彩色点缀）
+  startSpeed: 2,                    // 起始速度档 1–5 → initialSpeedMs
   soundOn: true,                    // 音效开关（Task 6 使用）
   colorChange: true,                // 颜色变化开关
   shapeChange: true,                // 形状（模式）变化开关
   flickerChange: true               // 闪烁开关
 };
+
+// 从 localStorage 读取设置：解析失败或字段缺失时用默认值补齐（与最高分同款防御）
+function loadSettings() {
+  const out = {
+    flickerLevel: defaultSettings.flickerLevel,
+    modes: defaultSettings.modes.slice(), // 复制数组，避免默认值被共享修改
+    colorMode: defaultSettings.colorMode,
+    startSpeed: defaultSettings.startSpeed,
+    soundOn: defaultSettings.soundOn,
+    colorChange: defaultSettings.colorChange,
+    shapeChange: defaultSettings.shapeChange,
+    flickerChange: defaultSettings.flickerChange
+  };
+  try {
+    if (typeof localStorage === 'undefined') return out;
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (!raw) return out;
+    const saved = JSON.parse(raw);
+    if (saved && typeof saved === 'object') {
+      // 数值字段做类型与范围校验，越界值回退默认（保证设置面板回填时一定有对应控件）
+      if (Number.isFinite(saved.flickerLevel)) {
+        const fl = Math.floor(saved.flickerLevel);
+        if (fl >= 0 && fl < FLICKER_LEVELS.length) out.flickerLevel = fl;
+      }
+      if (Array.isArray(saved.modes) && saved.modes.length === defaultSettings.modes.length) {
+        out.modes = saved.modes.map(function (m) { return m === true; }); // 归一化为布尔
+      }
+      if (saved.colorMode === 'contrast' || saved.colorMode === 'mixed') out.colorMode = saved.colorMode;
+      if (Number.isFinite(saved.startSpeed)) {
+        const sp = Math.floor(saved.startSpeed);
+        if (sp >= 1 && sp <= 5) out.startSpeed = sp;
+      }
+      if (typeof saved.soundOn === 'boolean') out.soundOn = saved.soundOn;
+      if (typeof saved.colorChange === 'boolean') out.colorChange = saved.colorChange;
+      if (typeof saved.shapeChange === 'boolean') out.shapeChange = saved.shapeChange;
+      if (typeof saved.flickerChange === 'boolean') out.flickerChange = saved.flickerChange;
+    }
+  } catch (e) {
+    // 解析失败（损坏 JSON / localStorage 不可用）：静默回退默认
+  }
+  return out;
+}
+
+// 写入设置（写入失败如配额满时静默忽略，不影响游戏进行）
+function saveSettings(s) {
+  try {
+    if (typeof localStorage !== 'undefined') localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
+  } catch (e) {
+    // 静默忽略
+  }
+}
+
+// 设置对象：启动时从 localStorage 加载，家长设置面板修改后即时生效并持久化
+let settings = loadSettings();
 
 // [min, max] 区间随机数
 function randRange(min, max) {
@@ -1338,6 +1417,71 @@ function runSelfTests() {
     check('buildBgGeom: 圆点半径在 8-16px', radiusOk, '存在越界半径');
   }
 
+  // ---- 家长设置：默认结构 / 存取往返 / 起始速度（Task 5）----
+  check('defaultSettings: 结构完整', (function () {
+    return defaultSettings.flickerLevel === 1 &&
+      Array.isArray(defaultSettings.modes) && defaultSettings.modes.length === 6 &&
+      defaultSettings.modes.every(function (m) { return m === true; }) &&
+      defaultSettings.colorMode === 'contrast' &&
+      defaultSettings.startSpeed === 2 &&
+      defaultSettings.soundOn === true &&
+      defaultSettings.colorChange === true &&
+      defaultSettings.shapeChange === true &&
+      defaultSettings.flickerChange === true;
+  })(), '字段缺失或默认值不符');
+  {
+    // 损坏 JSON / 缺失字段：回退或补齐默认
+    const prevRaw = localStorage.getItem(SETTINGS_KEY);
+    try { localStorage.setItem(SETTINGS_KEY, '{broken json'); } catch (e) {}
+    const fallback = loadSettings();
+    check('loadSettings: 损坏 JSON 回退默认', fallback.startSpeed === 2 && fallback.flickerLevel === 1 && fallback.modes.length === 6 && fallback.modes[0] === true, '未回退默认');
+    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify({ startSpeed: 4 })); } catch (e) {}
+    const merged = loadSettings();
+    check('loadSettings: 缺失字段用默认补齐', merged.startSpeed === 4 && merged.soundOn === true && merged.colorMode === 'contrast' && merged.shapeChange === true, '补齐失败');
+    try {
+      if (prevRaw === null) localStorage.removeItem(SETTINGS_KEY);
+      else localStorage.setItem(SETTINGS_KEY, prevRaw);
+    } catch (e) {}
+  }
+  {
+    // 存取往返一致（结束时恢复原值，避免污染浏览器端真实设置）
+    const prevRaw = localStorage.getItem(SETTINGS_KEY);
+    const custom = {
+      flickerLevel: 2,
+      modes: [true, false, true, false, true, false],
+      colorMode: 'mixed',
+      startSpeed: 5,
+      soundOn: false,
+      colorChange: false,
+      shapeChange: true,
+      flickerChange: false
+    };
+    saveSettings(custom);
+    const back = loadSettings();
+    check('saveSettings→loadSettings: 往返一致', JSON.stringify(back) === JSON.stringify(custom), '实际 ' + JSON.stringify(back));
+    try {
+      if (prevRaw === null) localStorage.removeItem(SETTINGS_KEY);
+      else localStorage.setItem(SETTINGS_KEY, prevRaw);
+    } catch (e) {}
+  }
+  check('initialSpeedMs: 1–5 档映射', (function () {
+    const expected = [220, 180, 140, 100, 60];
+    for (let i = 0; i < 5; i++) {
+      if (initialSpeedMs(i + 1) !== expected[i]) return false;
+    }
+    return true;
+  })(), '映射不符');
+  check('initialSpeedMs: 越界档位回退默认起始速度', initialSpeedMs(0) === SPEED_START_MS && initialSpeedMs(6) === SPEED_START_MS, '越界未回退');
+  {
+    // speedForLevel 自定义 base（家长设置的起始速度）
+    const fast = speedForLevel(0, 100);
+    const stepped = speedForLevel(5, 100);
+    const clamped = speedForLevel(100, 100);
+    check('speedForLevel(n, baseMs): 自定义起始速度生效', fast === 100, '实际 ' + fast);
+    check('speedForLevel(n, baseMs): 按档递减', stepped === 80, '实际 ' + stepped);
+    check('speedForLevel(n, baseMs): 不低于 SPEED_MIN_MS', clamped === SPEED_MIN_MS, '实际 ' + clamped);
+  }
+
   return results;
 }
 
@@ -1417,10 +1561,19 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     bgAccentAt = now + randRange(BG_ACCENT_MIN_MS, BG_ACCENT_MAX_MS);
   }
 
-  // 每 20-40s 轮换一次：形状开关决定是否换模式，颜色开关决定是否换配色
+  // 每 20-40s 轮换一次：形状开关决定是否换模式，颜色开关决定是否换配色。
+  // 家长取消全部模式勾选时（modes 全 false）切到 -1 纯背景色路径，并清空几何与点缀；
+  // 重新勾选后轮换自动恢复。
   function rotateBgPattern(now) {
     let modeChanged = false;
-    if (settings.shapeChange) {
+    if (settings.modes.indexOf(true) === -1) {
+      // 全部模式未勾选：过渡到纯背景色填充（配色轮换仍生效）
+      if (bgModeIndex >= 0) {
+        bgModeIndex = -1;
+        bgGeomDirty = true;   // 几何失效，重建（纯色路径不依赖几何）
+        bgAccents = [];       // 清空点缀，避免残留彩色圆点
+      }
+    } else if (settings.shapeChange) {
       const next = pickNextMode(bgModeIndex, settings.modes);
       if (next >= 0 && next !== bgModeIndex) {
         bgModeIndex = next;
@@ -1547,6 +1700,23 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     }
   }
 
+  // 家长设置即时生效（抽屉控件变更时调用）：
+  // 闪烁频率按最新档位重取；全部模式取消勾选时切到 -1 纯色路径并清空点缀；
+  // 重新勾选后立即恢复轮换。
+  function applyBgSettings() {
+    bgFlickerHz = jitterHz(flickerHzForLevel(settings.flickerLevel)); // 当前图案立即改用新闪烁频率
+    if (settings.modes.indexOf(true) === -1) {
+      if (bgModeIndex >= 0) {
+        bgModeIndex = -1;
+        bgGeomDirty = true;
+        bgAccents = [];     // 清空点缀，过渡到纯背景色填充
+      }
+    } else if (bgModeIndex < 0) {
+      bgModeIndex = pickNextMode(-1, settings.modes); // 恢复轮换
+      bgGeomDirty = true;
+      bgModeT0 = performance.now(); // 重置相位起点，图案从头绘制
+    }
+  }
 
   // 读取最高分（localStorage 缺失、非法或读取异常时返回 0）
   function readHighScore() {
@@ -1644,8 +1814,9 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
       accMs += dt;
       let steps = 0;
       // 帧间隔抖动时一次最多补 3 格，避免长时间卡顿后瞬间连跳；每步重取速度，加速即时生效
+      const baseMs = initialSpeedMs(settings.startSpeed); // 家长设置的起始速度档
       while (state.running && !state.paused && !state.gameOver && steps < 3) {
-        const interval = speedForLevel(state.foodsEaten);
+        const interval = speedForLevel(state.foodsEaten, baseMs);
         if (accMs < interval) break;
         accMs -= interval;
         steps++;
@@ -1700,6 +1871,82 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   // 结束浮层“再玩一次”
   const btnRestart = document.getElementById('btnRestart');
   if (btnRestart) btnRestart.addEventListener('click', startGame);
+
+  // ---- 家长设置抽屉（Task 5）：打开/关闭、控件即时生效并持久化 ----
+  const settingsDrawerEl = document.getElementById('settingsDrawer');
+  const drawerMaskEl = document.getElementById('drawerMask');
+  const btnOpenSettings = document.getElementById('btnOpenSettings');
+  const btnDrawerClose = document.getElementById('btnDrawerClose');
+  function openSettingsDrawer() {
+    if (settingsDrawerEl) settingsDrawerEl.classList.remove('hidden');
+    if (drawerMaskEl) drawerMaskEl.classList.remove('hidden');
+  }
+  function closeSettingsDrawer() {
+    if (settingsDrawerEl) settingsDrawerEl.classList.add('hidden');
+    if (drawerMaskEl) drawerMaskEl.classList.add('hidden');
+  }
+  if (btnOpenSettings) btnOpenSettings.addEventListener('click', openSettingsDrawer);
+  if (btnDrawerClose) btnDrawerClose.addEventListener('click', closeSettingsDrawer);
+  if (drawerMaskEl) drawerMaskEl.addEventListener('click', closeSettingsDrawer);
+
+  // 单选组通用绑定：回填当前值 + 变更即生效并持久化
+  function backfillRadio(name, value) {
+    const radios = document.querySelectorAll('input[name="' + name + '"]');
+    for (let i = 0; i < radios.length; i++) {
+      radios[i].checked = radios[i].value === String(value);
+    }
+  }
+  function bindRadios(name, onPick) {
+    const radios = document.querySelectorAll('input[name="' + name + '"]');
+    for (let i = 0; i < radios.length; i++) {
+      radios[i].addEventListener('change', function () {
+        if (!this.checked) return;
+        onPick(this.value);
+        saveSettings(settings);
+        applyBgSettings();
+      });
+    }
+  }
+  backfillRadio('flickerLevel', settings.flickerLevel);
+  bindRadios('flickerLevel', function (v) { settings.flickerLevel = Number(v); });
+  backfillRadio('colorMode', settings.colorMode);
+  bindRadios('colorMode', function (v) { settings.colorMode = v; });
+  backfillRadio('startSpeed', settings.startSpeed);
+  bindRadios('startSpeed', function (v) { settings.startSpeed = Number(v); });
+
+  // 刺激模式勾选（顺序与 MODE_IDS 一致）：回填 + 变更即生效并持久化
+  const modeBoxes = document.querySelectorAll('input[name="mode"]');
+  for (let i = 0; i < modeBoxes.length; i++) {
+    modeBoxes[i].checked = !!settings.modes[i];
+    modeBoxes[i].addEventListener('change', function () {
+      settings.modes[i] = this.checked;
+      saveSettings(settings);
+      applyBgSettings();
+    });
+  }
+
+  // 音效开关：只持久化，不影响背景渲染
+  const soundOnEl = document.getElementById('soundOn');
+  if (soundOnEl) {
+    soundOnEl.checked = !!settings.soundOn;
+    soundOnEl.addEventListener('change', function () {
+      settings.soundOn = soundOnEl.checked;
+      saveSettings(settings);
+    });
+  }
+  // 背景变化三开关（id 与 settings 键同名）：回填 + 变更即生效并持久化
+  const bgCheckboxKeys = ['colorChange', 'shapeChange', 'flickerChange'];
+  for (let i = 0; i < bgCheckboxKeys.length; i++) {
+    const key = bgCheckboxKeys[i];
+    const el = document.getElementById(key);
+    if (!el) continue;
+    el.checked = !!settings[key];
+    el.addEventListener('change', function () {
+      settings[key] = el.checked;
+      saveSettings(settings);
+      applyBgSettings();
+    });
+  }
 
   // ---- 输入控制：键盘（方向键 / WASD + 空格、P 暂停）----
   function onKeyDown(e) {
