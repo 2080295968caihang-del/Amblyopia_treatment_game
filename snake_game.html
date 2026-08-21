@@ -435,6 +435,331 @@ function flickerHzForLevel(level) {
   return FLICKER_LEVELS[level];
 }
 
+
+
+/* ---------- 背景刺激层：常量与可测试纯函数（Task 4） ---------- */
+
+// 6 种刺激模式（索引顺序与设置面板勾选值一致）
+const MODE_IDS = ['red_flicker', 'cam_grating', 'checkerboard', 'dots', 'stripes', 'fun_shapes'];
+
+// 高对比配色组：{name, fg 图案前景, bg 背景}，每 20-40s 随机轮换一组
+const COLOR_PALETTES = [
+  { name: '黑白', fg: '#ffffff', bg: '#000000' },
+  { name: '红白', fg: '#ff0000', bg: '#ffffff' },
+  { name: '蓝黄', fg: '#ffd400', bg: '#0000ff' },
+  { name: '绿黑', fg: '#00ff00', bg: '#000000' }
+];
+
+// 混合模式（colorMode='mixed'）的彩色点缀颜色池
+const ACCENT_COLORS = ['#ff2d2d', '#ffd400', '#00e5ff', '#ff66ff', '#7cff00', '#ff9d00'];
+
+// 轮换/点缀周期常量
+const BG_ROTATE_MIN_MS = 20000;   // 模式/配色轮换最短周期 20s
+const BG_ROTATE_MAX_MS = 40000;   // 模式/配色轮换最长周期 40s
+const BG_ACCENT_MIN_MS = 5000;    // 混合模式点缀最短周期 5s
+const BG_ACCENT_MAX_MS = 8000;    // 混合模式点缀最长周期 8s
+const BG_DRIFT_PX = 60;           // 图案整体平移速度（约 1px/tick @60fps）
+const BG_FLICKER_JITTER = 0.2;    // 闪烁频率 ±20% 抖动
+const ACCENT_MAX = 16;            // 混合模式点缀数量上限
+
+// 设置对象：Task 5 接入家长设置面板后由其改写，默认值与 defaultSettings 一致
+const settings = {
+  flickerLevel: 1,                  // 0/1/2 → 0.95/1.4/2.4 Hz
+  modes: [true, true, true, true, true, true], // 6 种模式是否参与轮换
+  colorMode: 'contrast',            // 'contrast' 高对比 | 'mixed' 混合（带彩色点缀）
+  soundOn: true,                    // 音效开关（Task 6 使用）
+  colorChange: true,                // 颜色变化开关
+  shapeChange: true,                // 形状（模式）变化开关
+  flickerChange: true               // 闪烁开关
+};
+
+// [min, max] 区间随机数
+function randRange(min, max) {
+  return min + Math.random() * (max - min);
+}
+
+// 从启用模式集合（enabledModes[i]===true）随机选下一个模式索引，
+// 不连续两次相同（previousIndex）；无任何启用模式时返回 -1。
+function pickNextMode(previousIndex, enabledModes) {
+  const enabled = [];
+  for (let i = 0; i < enabledModes.length; i++) {
+    if (enabledModes[i]) enabled.push(i);
+  }
+  if (enabled.length === 0) return -1;
+  if (enabled.length === 1) return enabled[0];
+  let next = previousIndex;
+  while (next === previousIndex) {
+    next = enabled[Math.floor(Math.random() * enabled.length)];
+  }
+  return next;
+}
+
+// 从高对比配色组随机选一组索引，不连续两次相同
+function pickColorPalette(previousIndex) {
+  if (COLOR_PALETTES.length <= 1) return 0;
+  let next = previousIndex;
+  while (next === previousIndex) {
+    next = Math.floor(Math.random() * COLOR_PALETTES.length);
+  }
+  return next;
+}
+
+// 闪烁频率抖动：baseHz × (0.8~1.2)，每次进入新模式重新取值
+function jitterHz(baseHz) {
+  return baseHz * (1 + (Math.random() * 2 - 1) * BG_FLICKER_JITTER);
+}
+
+// 确定性伪随机数生成器（mulberry32）：同一种子生成同一组图案几何，避免逐帧随机抖动
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// 依据模式索引与种子预生成图案几何（条纹方向/粗细、圆点、童趣图案位置等）
+function buildBgGeom(modeIndex, seed, w, h) {
+  const rnd = mulberry32(seed);
+  const geom = { type: modeIndex, items: [] };
+  switch (modeIndex) {
+    case 1: // cam_grating：方向横/竖/斜随机，条宽 40-80px
+      geom.direction = ['horizontal', 'vertical', 'diagonal'][Math.floor(rnd() * 3)];
+      geom.width = 40 + Math.floor(rnd() * 41);
+      break;
+    case 2: // checkerboard：100px 棋盘格
+      geom.cell = 100;
+      break;
+    case 3: { // dots：圆点阵列，半径 8-16px
+      const spacing = 56;
+      for (let y = spacing / 2; y < h + spacing; y += spacing) {
+        for (let x = spacing / 2; x < w + spacing; x += spacing) {
+          geom.items.push({
+            x: x + (rnd() - 0.5) * 12,
+            y: y + (rnd() - 0.5) * 12,
+            r: 8 + rnd() * 8
+          });
+        }
+      }
+      break;
+    }
+    case 4: { // stripes：粗细变化的对比条纹
+      geom.direction = ['horizontal', 'vertical', 'diagonal'][Math.floor(rnd() * 3)];
+      geom.widths = [];
+      for (let i = 0; i < 6; i++) geom.widths.push(20 + Math.floor(rnd() * 61));
+      break;
+    }
+    case 5: { // fun_shapes：星星/花朵/爱心/月亮随机排布
+      const types = ['star', 'flower', 'heart', 'moon'];
+      const count = Math.max(4, Math.floor((w * h) / 36000));
+      for (let i = 0; i < count; i++) {
+        geom.items.push({
+          x: rnd() * w,
+          y: rnd() * h,
+          s: 24 + rnd() * 40,
+          rot: rnd() * Math.PI * 2,
+          type: types[Math.floor(rnd() * types.length)]
+        });
+      }
+      break;
+    }
+  }
+  return geom;
+}
+
+// 全屏红/黑：按 flickerHz 的 sin 波占空交替；闪烁关闭时整屏红色静止
+function drawRedFlicker(ctx, t, cfg) {
+  const w = cfg.w;
+  const h = cfg.h;
+  if (!cfg.flicker) {
+    ctx.fillStyle = '#ff0000';
+    ctx.fillRect(0, 0, w, h);
+    return;
+  }
+  const alpha = (Math.sin(2 * Math.PI * cfg.flickerHz * t) + 1) / 2;
+  ctx.fillStyle = '#000000';
+  ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = '#ff0000';
+  ctx.globalAlpha = alpha;
+  ctx.fillRect(0, 0, w, h);
+  ctx.globalAlpha = 1;
+}
+
+// 黑白方波条纹（CAM 光栅）：方向随机，条宽 40-80px，整体缓慢平移（约 1px/tick）
+function drawCamGrating(ctx, t, cfg) {
+  const w = cfg.w;
+  const h = cfg.h;
+  const geom = cfg.geom;
+  const width = geom.width;
+  const period = width * 2;
+  const offset = (t * BG_DRIFT_PX) % period;
+  ctx.fillStyle = cfg.palette.bg;
+  ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = cfg.palette.fg;
+  if (geom.direction === 'vertical') {
+    for (let x = -period + offset; x < w + period; x += period) ctx.fillRect(x, 0, width, h);
+  } else if (geom.direction === 'horizontal') {
+    for (let y = -period + offset; y < h + period; y += period) ctx.fillRect(0, y, w, width);
+  } else {
+    const len = Math.hypot(w, h);
+    ctx.save();
+    ctx.translate(w / 2, h / 2);
+    ctx.rotate(Math.PI / 4);
+    for (let y = -period + offset; y < len + period; y += period) ctx.fillRect(-len, y, len * 2, width);
+    ctx.restore();
+  }
+}
+
+// 100px 棋盘格：整体按 100px 周期缓慢跳动
+function drawCheckerboard(ctx, t, cfg) {
+  const w = cfg.w;
+  const h = cfg.h;
+  const cell = cfg.geom.cell;
+  const offset = (t * BG_DRIFT_PX) % cell;
+  ctx.fillStyle = cfg.palette.bg;
+  ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = cfg.palette.fg;
+  for (let gy = -1; gy * cell < h + cell; gy++) {
+    for (let gx = -1; gx * cell < w + cell; gx++) {
+      if (((gx + gy) & 1) === 0) ctx.fillRect(gx * cell + offset, gy * cell + offset, cell, cell);
+    }
+  }
+}
+
+// 高对比圆点阵列：半径 8-16px，网格排布带随机偏移
+function drawDots(ctx, t, cfg) {
+  const w = cfg.w;
+  const h = cfg.h;
+  ctx.fillStyle = cfg.palette.bg;
+  ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = cfg.palette.fg;
+  const items = cfg.geom.items;
+  for (let i = 0; i < items.length; i++) {
+    ctx.beginPath();
+    ctx.arc(items[i].x, items[i].y, items[i].r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+// 粗细变化的对比条纹：随机方向 + 随机粗细序列，缓慢平移
+function drawStripes(ctx, t, cfg) {
+  const w = cfg.w;
+  const h = cfg.h;
+  const geom = cfg.geom;
+  const widths = geom.widths;
+  let total = 0;
+  for (let i = 0; i < widths.length; i++) total += widths[i];
+  const offset = (t * BG_DRIFT_PX) % total;
+  const len = Math.hypot(w, h);
+  ctx.fillStyle = cfg.palette.bg;
+  ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = cfg.palette.fg;
+  const limit = geom.direction === 'vertical' ? w : h;
+  ctx.save();
+  if (geom.direction === 'diagonal') {
+    ctx.translate(w / 2, h / 2);
+    ctx.rotate(Math.PI / 4);
+  }
+  let pos = -total + offset;
+  let i = 0;
+  while (pos < (geom.direction === 'diagonal' ? len : limit)) {
+    const bw = widths[i % widths.length];
+    if (i % 2 === 0) { // 隔条填充，形成明暗对比条纹
+      if (geom.direction === 'vertical') ctx.fillRect(pos, 0, bw, h);
+      else if (geom.direction === 'horizontal') ctx.fillRect(0, pos, w, bw);
+      else ctx.fillRect(-len, pos, len * 2, bw);
+    }
+    pos += bw;
+    i++;
+  }
+  ctx.restore();
+}
+
+// 五角星
+function fillStar(ctx, s) {
+  const outer = s / 2;
+  const inner = outer * 0.4;
+  ctx.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const r = i % 2 === 0 ? outer : inner;
+    const a = (i * Math.PI) / 5 - Math.PI / 2;
+    const x = Math.cos(a) * r;
+    const y = Math.sin(a) * r;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.fill();
+}
+
+// 花朵：中心圆 + 5 片花瓣圆
+function fillFlower(ctx, s) {
+  const r = s / 4;
+  for (let i = 0; i < 5; i++) {
+    const a = (i * Math.PI * 2) / 5;
+    ctx.beginPath();
+    ctx.arc(Math.cos(a) * r * 1.5, Math.sin(a) * r * 1.5, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.beginPath();
+  ctx.arc(0, 0, r * 1.2, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+// 爱心（两条贝塞尔曲线）
+function fillHeart(ctx, s) {
+  ctx.beginPath();
+  ctx.moveTo(0, s * 0.35);
+  ctx.bezierCurveTo(s * 0.55, -s * 0.15, s * 0.3, -s * 0.55, 0, -s * 0.15);
+  ctx.bezierCurveTo(-s * 0.3, -s * 0.55, -s * 0.55, -s * 0.15, 0, s * 0.35);
+  ctx.closePath();
+  ctx.fill();
+}
+
+// 月牙（两圆非零环绕相减）
+function fillMoon(ctx, s) {
+  const r = s / 2;
+  ctx.beginPath();
+  ctx.arc(0, 0, r, 0, Math.PI * 2);
+  ctx.arc(r * 0.45, -r * 0.25, r * 0.85, 0, Math.PI * 2, true);
+  ctx.fill();
+}
+
+// 童趣图案：星星/花朵/爱心/月亮高对比随机排布
+function drawFunShapes(ctx, t, cfg) {
+  const w = cfg.w;
+  const h = cfg.h;
+  ctx.fillStyle = cfg.palette.bg;
+  ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = cfg.palette.fg;
+  const items = cfg.geom.items;
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    ctx.save();
+    ctx.translate(it.x, it.y);
+    ctx.rotate(it.rot);
+    if (it.type === 'star') fillStar(ctx, it.s);
+    else if (it.type === 'flower') fillFlower(ctx, it.s);
+    else if (it.type === 'heart') fillHeart(ctx, it.s);
+    else fillMoon(ctx, it.s);
+    ctx.restore();
+  }
+}
+
+// 全局闪烁叠加：按 flickerHz 让整屏亮度随 sin 波起伏（red_flicker 模式自带闪烁，不叠加）
+function drawFlickerOverlay(ctx, t, cfg) {
+  const alpha = ((Math.sin(2 * Math.PI * cfg.flickerHz * t) + 1) / 2) * 0.35;
+  ctx.fillStyle = '#000000';
+  ctx.globalAlpha = alpha;
+  ctx.fillRect(0, 0, cfg.w, cfg.h);
+  ctx.globalAlpha = 1;
+}
+
+// 6 种模式绘制函数（索引与 MODE_IDS 一致）
+const BG_DRAWERS = [drawRedFlicker, drawCamGrating, drawCheckerboard, drawDots, drawStripes, drawFunShapes];
+
 /* ---------- 游戏状态与核心逻辑（纯函数，Node 可测） ---------- */
 
 // 创建一局游戏的初始状态（纯数据）
@@ -896,6 +1221,83 @@ function runSelfTests() {
     const ok = handleGameKey(s, 'ArrowLeft'); // 180° 反向被拒
     check('handleGameKey: 反向键被拒时保留鼠标跟随（仅成功时接管）', ok === true && s.nextDir === 'right' && s.mouseActive === true, '实际 ok=' + ok + ' nextDir=' + s.nextDir + ' mouseActive=' + s.mouseActive);
   }
+
+
+  // ---- 背景刺激层：pickNextMode（Task 4）----
+  check('pickNextMode: 无启用模式返回 -1', (function () {
+    return pickNextMode(2, [false, false, false, false, false, false]) === -1;
+  })(), '未返回 -1');
+  check('pickNextMode: 单个启用模式返回该模式', (function () {
+    return pickNextMode(3, [false, true, false, false, false, false]) === 1;
+  })(), '未返回唯一启用模式');
+  {
+    let neverRepeat = true;
+    let inRange = true;
+    for (let i = 0; i < 300; i++) {
+      const next = pickNextMode(2, [true, true, true, true, true, true]);
+      if (next === 2) neverRepeat = false;
+      if (next < 0 || next > 5) inRange = false;
+    }
+    check('pickNextMode: 300 次不与上一次重复且在范围内', neverRepeat && inRange, '出现重复或越界');
+  }
+  {
+    let ok = true;
+    for (let i = 0; i < 200; i++) {
+      const next = pickNextMode(-1, [false, false, true, false, true, false]);
+      if (next !== 2 && next !== 4) ok = false;
+    }
+    check('pickNextMode: 只从启用模式中选取', ok, '选中了未启用模式');
+  }
+  check('背景设置: MODE_IDS 与 settings.modes 均为 6 项且默认全选', (function () {
+    return MODE_IDS.length === 6 && settings.modes.length === 6 && settings.modes.every(function (m) { return m === true; });
+  })(), '数量或默认值不符');
+
+  // ---- 背景刺激层：pickColorPalette（Task 4）----
+  check('COLOR_PALETTES: 恰好 4 组且含前景/背景色', (function () {
+    return COLOR_PALETTES.length === 4 && COLOR_PALETTES.every(function (p) { return typeof p.fg === 'string' && typeof p.bg === 'string'; });
+  })(), '实际 ' + COLOR_PALETTES.length + ' 组');
+  {
+    let neverRepeat = true;
+    let inRange = true;
+    for (let i = 0; i < 300; i++) {
+      const next = pickColorPalette(0);
+      if (next === 0) neverRepeat = false;
+      if (next < 0 || next >= COLOR_PALETTES.length) inRange = false;
+    }
+    check('pickColorPalette: 300 次不与上一次重复且在范围内', neverRepeat && inRange, '出现重复或越界');
+  }
+  {
+    let ok = true;
+    for (let i = 0; i < 50; i++) {
+      const next = pickColorPalette(-1);
+      if (next < 0 || next >= COLOR_PALETTES.length) ok = false;
+    }
+    check('pickColorPalette: previousIndex=-1 时返回合法索引', ok, '出现越界');
+  }
+
+  // ---- 背景刺激层：jitterHz ±20% 抖动（Task 4）----
+  {
+    let inBand = true;
+    let varies = false;
+    let first = null;
+    for (let i = 0; i < 200; i++) {
+      const j = jitterHz(1.4);
+      if (j < 1.4 * 0.8 || j > 1.4 * 1.2) inBand = false;
+      if (first === null) first = j;
+      else if (j !== first) varies = true;
+    }
+    check('jitterHz: 200 次均落在 ±20% 区间', inBand, '超出 [0.8, 1.2] × baseHz');
+    check('jitterHz: 结果存在随机波动（非恒定）', varies, '始终返回同一值');
+  }
+  {
+    let ok = true;
+    for (let i = 0; i < 50; i++) {
+      const j = jitterHz(0.95);
+      if (j < 0.95 * 0.8 || j > 0.95 * 1.2) ok = false;
+    }
+    check('jitterHz: 0.95Hz 档位抖动也在区间内', ok, '超出区间');
+  }
+
   return results;
 }
 
@@ -941,6 +1343,168 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   let lastFrameTs = null;             // 上一帧时间戳（用于时间累积）
   let accMs = 0;                      // 距下一次移动累积的毫秒数
   let lastMouseCell = null;           // 鼠标在游戏屏上的最近目标格（Task 3，每 tick 用于鼠标跟随）
+
+  /* ---------- 背景刺激层（Task 4）：独立 rAF 循环 + 6 模式 + 配色/闪烁/轮换 ---------- */
+  const bgCanvasEl = document.getElementById('bgCanvas');
+  let bgInitialized = false;        // 背景是否已初始化（首次进入游戏时）
+  let bgAnimId = null;              // 背景循环 rAF 句柄
+  let bgModeIndex = 0;              // 当前模式索引（对应 MODE_IDS）
+  let bgPaletteIndex = 0;           // 当前配色索引（对应 COLOR_PALETTES）
+  let bgModeT0 = 0;                 // 当前模式开始时间戳（ms，与 rAF 同源）
+  let bgRotateAt = 0;               // 下次模式/配色轮换时刻（ms）
+  let bgAccentAt = 0;               // 混合模式下次点缀时刻（ms）
+  let bgFlickerHz = jitterHz(flickerHzForLevel(settings.flickerLevel)); // 当前闪烁频率（Hz）
+  let bgFreezeT = null;             // 闪烁关闭时的冻结相位（秒）：保留最后一帧
+  let bgPauseStart = null;          // 进入暂停的时间戳（恢复时扣除暂停时长）
+  let bgSeed = 0;                   // 当前模式图案几何种子
+  let bgGeom = null;                // 当前模式预生成几何（种子随机，避免逐帧抖动）
+  let bgGeomDirty = true;           // 需要重建几何（进入新模式或画布尺寸变化）
+  let bgAccents = [];               // 混合模式彩色点缀列表
+
+  // 重建几何：模式/种子变化或画布尺寸变化时调用
+  function ensureBgGeom() {
+    if (!bgGeomDirty) return;
+    bgGeom = buildBgGeom(bgModeIndex, bgSeed, bgCanvasEl.width, bgCanvasEl.height);
+    bgGeomDirty = false;
+  }
+
+  // 进入新模式的初始化：换种子、重置相位与闪烁频率、清空点缀
+  function newBgPattern(now) {
+    bgSeed = (Math.random() * 0xffffffff) >>> 0;
+    bgGeomDirty = true;
+    bgModeT0 = now;
+    bgFlickerHz = jitterHz(flickerHzForLevel(settings.flickerLevel)); // 每次进入新模式重新取值
+    bgAccents = [];
+    bgAccentAt = now + randRange(BG_ACCENT_MIN_MS, BG_ACCENT_MAX_MS);
+  }
+
+  // 每 20-40s 轮换一次：形状开关决定是否换模式，颜色开关决定是否换配色
+  function rotateBgPattern(now) {
+    let modeChanged = false;
+    if (settings.shapeChange) {
+      const next = pickNextMode(bgModeIndex, settings.modes);
+      if (next >= 0 && next !== bgModeIndex) {
+        bgModeIndex = next;
+        modeChanged = true;
+      }
+    }
+    if (settings.colorChange) {
+      const next = pickColorPalette(bgPaletteIndex);
+      if (next !== bgPaletteIndex) bgPaletteIndex = next;
+    }
+    if (modeChanged) newBgPattern(now); // 换模式：新种子 + 新闪烁频率 + 清点缀
+    bgRotateAt = now + randRange(BG_ROTATE_MIN_MS, BG_ROTATE_MAX_MS);
+  }
+
+  // 背景初始化（首次开始游戏时）：随机首模式与配色
+  function initBg(now) {
+    bgModeIndex = pickNextMode(-1, settings.modes);
+    if (bgModeIndex < 0) bgModeIndex = 0; // 全部未勾选时退回红光闪烁
+    bgPaletteIndex = pickColorPalette(-1);
+    bgRotateAt = now + randRange(BG_ROTATE_MIN_MS, BG_ROTATE_MAX_MS);
+    newBgPattern(now);
+    bgInitialized = true;
+  }
+
+  // 混合模式点缀：每 5-8s 穿插 1-2 个彩色圆点（上限 ACCENT_MAX，超出淘汰最旧）
+  function addBgAccent(now) {
+    const w = bgCanvasEl.width;
+    const h = bgCanvasEl.height;
+    const count = Math.random() < 0.5 ? 1 : 2;
+    for (let i = 0; i < count; i++) {
+      bgAccents.push({
+        x: 20 + Math.random() * (w - 40),
+        y: 20 + Math.random() * (h - 40),
+        r: 10 + Math.random() * 14,
+        color: ACCENT_COLORS[Math.floor(Math.random() * ACCENT_COLORS.length)]
+      });
+      if (bgAccents.length > ACCENT_MAX) bgAccents.shift();
+    }
+    bgAccentAt = now + randRange(BG_ACCENT_MIN_MS, BG_ACCENT_MAX_MS);
+  }
+
+  // 每帧渲染：顺序 = 模式图案 → 混合点缀 → 闪烁叠加
+  function drawBgFrame(ctx, t) {
+    ensureBgGeom();
+    const cfg = {
+      w: bgCanvasEl.width,
+      h: bgCanvasEl.height,
+      t: t,
+      palette: COLOR_PALETTES[bgPaletteIndex],
+      geom: bgGeom,
+      accents: bgAccents,
+      flickerHz: bgFlickerHz,
+      flicker: settings.flickerChange
+    };
+    BG_DRAWERS[bgModeIndex](ctx, t, cfg);
+    if (settings.colorMode === 'mixed') {
+      for (let i = 0; i < bgAccents.length; i++) {
+        const a = bgAccents[i];
+        ctx.fillStyle = a.color;
+        ctx.beginPath();
+        ctx.arc(a.x, a.y, a.r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    // red_flicker 模式本身即按 flickerHz 闪烁，不再叠加全局闪烁层
+    if (settings.flickerChange && bgModeIndex !== 0) drawFlickerOverlay(ctx, t, cfg);
+  }
+
+  // 背景渲染循环：独立 rAF；尺寸与窗口同步；暂停/结束/隐藏时停止并保留当前帧
+  function bgLoop(timestamp) {
+    const screenHidden = document.getElementById('gameScreen').classList.contains('hidden');
+    if (screenHidden || !state.running || state.gameOver) {
+      bgAnimId = null;
+      return; // 保留当前帧，不重绘不闪烁
+    }
+    if (state.paused) {
+      if (bgPauseStart === null) bgPauseStart = timestamp;
+      bgAnimId = null;
+      return; // 暂停：冻结动画（保留当前帧），避免无谓闪烁
+    }
+    // 尺寸与窗口同步：画布分辨率跟随其显示尺寸
+    const dw = Math.max(1, Math.round(bgCanvasEl.clientWidth));
+    const dh = Math.max(1, Math.round(bgCanvasEl.clientHeight));
+    if (bgCanvasEl.width !== dw || bgCanvasEl.height !== dh) {
+      bgCanvasEl.width = dw;
+      bgCanvasEl.height = dh;
+      bgGeomDirty = true; // 尺寸变化：按同一种子重建几何
+    }
+    const ctx = bgCanvasEl.getContext('2d');
+    // 闪烁关闭：冻结相位并跳过轮换/点缀，背景完全静止
+    if (!settings.flickerChange) {
+      if (bgFreezeT === null) bgFreezeT = (timestamp - bgModeT0) / 1000;
+      drawBgFrame(ctx, bgFreezeT);
+      bgAnimId = requestAnimationFrame(bgLoop);
+      return;
+    }
+    bgFreezeT = null;
+    // 每 20-40s 轮换模式/配色；混合模式每 5-8s 穿插彩色点缀
+    if (timestamp >= bgRotateAt) rotateBgPattern(timestamp);
+    if (settings.colorMode === 'mixed' && timestamp >= bgAccentAt) addBgAccent(timestamp);
+    drawBgFrame(ctx, (timestamp - bgModeT0) / 1000);
+    bgAnimId = requestAnimationFrame(bgLoop);
+  }
+
+  // 启动背景循环：已在运行时不重复启动；从暂停恢复时扣除暂停时长，图案相位不跳变
+  function startBgLoop() {
+    if (!bgCanvasEl || bgAnimId !== null) return;
+    if (!state.running || state.paused || state.gameOver) return;
+    if (bgPauseStart !== null) {
+      bgModeT0 += (performance.now() - bgPauseStart); // 扣除暂停时间，图案接续暂停前位置
+      bgPauseStart = null;
+    }
+    bgAnimId = requestAnimationFrame(bgLoop);
+  }
+
+  // 停止背景循环：画布保留当前帧
+  function stopBgLoop() {
+    if (bgAnimId !== null) {
+      cancelAnimationFrame(bgAnimId);
+      bgAnimId = null;
+    }
+  }
+
 
   // 读取最高分（localStorage 缺失、非法或读取异常时返回 0）
   function readHighScore() {
@@ -1032,6 +1596,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
       return;
     }
     if (state.running && !state.paused) {
+      startBgLoop(); // 背景循环随游戏运行启停（暂停时 bgLoop 自行停止并保留帧）
       const dt = lastFrameTs === null ? 0 : Math.min(timestamp - lastFrameTs, 250);
       lastFrameTs = timestamp;
       accMs += dt;
@@ -1058,6 +1623,7 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   function gameOver() {
     state.running = false;
     state.gameOver = true;
+    stopBgLoop(); // 结束浮层覆盖：停止背景循环并保留当前帧
     syncHighScore();
     document.getElementById('endScore').textContent = String(state.score);
     document.getElementById('endHighScore').textContent = String(readHighScore());
@@ -1077,6 +1643,8 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     lastMouseCell = null; // 跨局清除鼠标目标格，避免残留跟随
     updateHud();
     renderGame();
+    if (!bgInitialized) initBg(performance.now()); // 首次开始：初始化背景
+    startBgLoop(); // 开始游戏：启动背景循环
     cancelAnimationFrame(animationId);
     animationId = requestAnimationFrame(loop);
   }
